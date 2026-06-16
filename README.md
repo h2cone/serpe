@@ -1,26 +1,26 @@
 # ouro
 
-Minimal Rust agent example built around the OpenAI Responses API.
+Minimal Go agent example built around the OpenAI Responses API.
 
 ## Features
 
-- Single-file agent implementation in `examples/agent/main.rs`
-- Minimal dependencies with `serde_json` and `ureq`
+- Small command-line agent in `cmd/agent`
+- Standard-library HTTP client and JSON handling
 - Built-in local tools for shell execution plus file reads and writes
-- Test coverage for tool execution, response handling, and semantic stop conditions
+- Focused tests for tool execution, response handling, CLI parsing, and semantic stop conditions
 
 ## Getting Started
 
 ### Requirements
 
-- Rust and Cargo
+- Go 1.22 or newer
 - An `OPENAI_API_KEY` environment variable
 
 ### Run the example agent
 
 ```powershell
 $env:OPENAI_API_KEY="your-api-key"
-cargo run --example agent -- "gpt-5.4" "hello"
+go run ./cmd/agent -- "gpt-5.4" "hello"
 ```
 
 Optional environment variables:
@@ -32,16 +32,16 @@ Command-line arguments:
 - First positional argument is required `model`
 - Remaining positional arguments are required `task`
 
-The crate root binary prints a reminder for the example entrypoint:
+The module root binary prints a reminder for the agent entrypoint:
 
 ```powershell
-cargo run
+go run .
 ```
 
 ## Test
 
 ```powershell
-cargo test
+go test ./...
 ```
 
 ## License
