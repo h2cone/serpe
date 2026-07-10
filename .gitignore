@@ -22,4 +22,6 @@ go.work.sum
 #.idea/
 
 # Docs
-docs/req.md
+docs/
+.tmp/
+*.tmp
