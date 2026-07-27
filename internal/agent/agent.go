@@ -60,19 +60,7 @@ func New(config Config) *Agent {
 // Run is a single-turn convenience entry point. It creates a fresh transcript
 // from one user message and returns the final text response.
 func (a *Agent) Run(ctx context.Context, userMessage string) (string, error) {
-	result, err := a.RunTurn(ctx, &canon.Request{
-		Model: a.model,
-		Conversation: canon.Conversation{
-			System: a.instructions,
-			Messages: []canon.Message{
-				{
-					Role:    canon.RoleUser,
-					Content: []canon.ContentBlock{&canon.TextBlock{Text: userMessage}},
-				},
-			},
-		},
-		MaxTokens: a.maxTokens,
-	})
+	result, err := a.RunTurn(ctx, a.newRequest(userMessage))
 	if err != nil {
 		return "", err
 	}
@@ -82,19 +70,21 @@ func (a *Agent) Run(ctx context.Context, userMessage string) (string, error) {
 // RunStream is a single-turn streaming convenience entry point. The writer can
 // be backed by a terminal, a TUI model, or a Web transport.
 func (a *Agent) RunStream(ctx context.Context, userMessage string, w io.Writer) (string, error) {
-	return a.RunStreamRequest(ctx, &canon.Request{
-		Model: a.model,
+	return a.RunStreamRequest(ctx, a.newRequest(userMessage), w)
+}
+
+func (a *Agent) newRequest(text string) *canon.Request {
+	return &canon.Request{
+		Model:     a.model,
+		MaxTokens: a.maxTokens,
 		Conversation: canon.Conversation{
 			System: a.instructions,
-			Messages: []canon.Message{
-				{
-					Role:    canon.RoleUser,
-					Content: []canon.ContentBlock{&canon.TextBlock{Text: userMessage}},
-				},
-			},
+			Messages: []canon.Message{{
+				Role:    canon.RoleUser,
+				Content: []canon.ContentBlock{&canon.TextBlock{Text: text}},
+			}},
 		},
-		MaxTokens: a.maxTokens,
-	}, w)
+	}
 }
 
 // RunRequest is the text-only compatibility wrapper around RunTurn.
@@ -110,6 +100,33 @@ func (a *Agent) RunRequest(ctx context.Context, seed *canon.Request) (string, er
 // updated transcript together with the final response. Interactive shells
 // should use this method directly or create a Session.
 func (a *Agent) RunTurn(ctx context.Context, seed *canon.Request) (*TurnResult, error) {
+	return a.runTurn(ctx, seed, nil)
+}
+
+// RunStreamRequest continues a caller-provided canonical transcript through the
+// provider's streaming path. Tool-use turns are internal: only the final
+// assistant text from a no-tool turn is written to w and returned.
+func (a *Agent) RunStreamRequest(ctx context.Context, seed *canon.Request, w io.Writer) (string, error) {
+	result, err := a.RunStreamTurn(ctx, seed, w)
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
+}
+
+// RunStreamTurn is the structured streaming entry point for interactive
+// shells. It returns the same complete transcript as RunTurn while sending the
+// final visible answer to w.
+func (a *Agent) RunStreamTurn(ctx context.Context, seed *canon.Request, w io.Writer) (*TurnResult, error) {
+	if w == nil {
+		w = io.Discard
+	}
+	return a.runTurn(ctx, seed, w)
+}
+
+// runTurn is the ReAct-like loop: ask, act on tool calls, append observations,
+// and repeat until the model answers without an action.
+func (a *Agent) runTurn(ctx context.Context, seed *canon.Request, output io.Writer) (*TurnResult, error) {
 	if seed == nil {
 		return nil, errors.New("nil request")
 	}
@@ -124,22 +141,21 @@ func (a *Agent) RunTurn(ctx context.Context, seed *canon.Request) (*TurnResult, 
 	if base.MaxTokens == 0 {
 		base.MaxTokens = a.maxTokens
 	}
-	base.Stream = false
+	base.Stream = output != nil
 
-	conv := cloneConversation(seed.Conversation)
+	conv := base.Conversation
 	if conv.System == "" {
 		conv.System = a.instructions
 	}
 
 	var lastStep *stepFingerprint
-
 	for {
 		request, err := a.buildRequest(base, conv)
 		if err != nil {
 			return nil, err
 		}
 
-		response, err := a.provider.Complete(ctx, request)
+		response, err := a.complete(ctx, request)
 		if err != nil {
 			return nil, err
 		}
@@ -158,6 +174,11 @@ func (a *Agent) RunTurn(ctx context.Context, seed *canon.Request) (*TurnResult, 
 			if text == "" {
 				return nil, fmt.Errorf("response did not contain tool calls or message text")
 			}
+			if output != nil {
+				if _, err := io.WriteString(output, text); err != nil {
+					return nil, err
+				}
+			}
 			return newTurnResult(text, response, conv), nil
 		}
 
@@ -165,7 +186,6 @@ func (a *Agent) RunTurn(ctx context.Context, seed *canon.Request) (*TurnResult, 
 		if err != nil {
 			return nil, err
 		}
-
 		if lastStep != nil && reflect.DeepEqual(*lastStep, currentStep) {
 			return nil, fmt.Errorf("semantic stop condition triggered: repeated identical tool calls produced identical outputs")
 		}
@@ -179,93 +199,15 @@ func (a *Agent) RunTurn(ctx context.Context, seed *canon.Request) (*TurnResult, 
 	}
 }
 
-// RunStreamRequest continues a caller-provided canonical transcript through the
-// provider's streaming path. Tool-use turns are internal: only the final
-// assistant text from a no-tool turn is written to w and returned.
-func (a *Agent) RunStreamRequest(ctx context.Context, seed *canon.Request, w io.Writer) (string, error) {
-	result, err := a.RunStreamTurn(ctx, seed, w)
+func (a *Agent) complete(ctx context.Context, request *canon.Request) (*canon.Response, error) {
+	if !request.Stream {
+		return a.provider.Complete(ctx, request)
+	}
+	events, err := a.provider.Stream(ctx, request)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return result.Text, nil
-}
-
-// RunStreamTurn is the structured streaming entry point for interactive
-// shells. It returns the same complete transcript as RunTurn while sending the
-// final visible answer to w.
-func (a *Agent) RunStreamTurn(ctx context.Context, seed *canon.Request, w io.Writer) (*TurnResult, error) {
-	if seed == nil {
-		return nil, errors.New("nil request")
-	}
-	if a.provider == nil {
-		return nil, errors.New("nil provider")
-	}
-	if w == nil {
-		w = io.Discard
-	}
-
-	base := cloneRequest(seed)
-	if base.Model == "" {
-		base.Model = a.model
-	}
-	if base.MaxTokens == 0 {
-		base.MaxTokens = a.maxTokens
-	}
-	base.Stream = true
-
-	conv := cloneConversation(seed.Conversation)
-	if conv.System == "" {
-		conv.System = a.instructions
-	}
-
-	var lastStep *stepFingerprint
-	for {
-		request, err := a.buildRequest(base, conv)
-		if err != nil {
-			return nil, err
-		}
-
-		events, err := a.provider.Stream(ctx, request)
-		if err != nil {
-			return nil, err
-		}
-		response, err := canon.Assemble(events)
-		if err != nil {
-			return nil, err
-		}
-
-		conv.Messages = append(conv.Messages, canon.Message{
-			Role:    canon.RoleAssistant,
-			Content: cloneBlocks(response.Content),
-		})
-
-		toolUses := collectToolUses(response.Content)
-		if len(toolUses) == 0 {
-			text := collectText(response.Content)
-			if text == "" {
-				return nil, fmt.Errorf("response did not contain tool calls or message text")
-			}
-			if _, err := io.WriteString(w, text); err != nil {
-				return nil, err
-			}
-			return newTurnResult(text, response, conv), nil
-		}
-
-		results, currentStep, err := a.executeToolUses(ctx, toolUses)
-		if err != nil {
-			return nil, err
-		}
-		if lastStep != nil && reflect.DeepEqual(*lastStep, currentStep) {
-			return nil, fmt.Errorf("semantic stop condition triggered: repeated identical tool calls produced identical outputs")
-		}
-
-		lastStep = &currentStep
-		relaxForcedToolChoice(&base)
-		conv.Messages = append(conv.Messages, canon.Message{
-			Role:    canon.RoleUser,
-			Content: results,
-		})
-	}
+	return canon.Assemble(events)
 }
 
 func newTurnResult(text string, response *canon.Response, conv canon.Conversation) *TurnResult {
