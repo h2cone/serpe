@@ -1,0 +1,147 @@
+package httpx
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/h2cone/ouro/core/models"
+)
+
+type errorEnvelope struct {
+	Error struct {
+		Message string          `json:"message"`
+		Type    string          `json:"type"`
+		Code    json.RawMessage `json:"code"`
+		Status  string          `json:"status"`
+	} `json:"error"`
+	Message string          `json:"message"`
+	Type    string          `json:"type"`
+	Code    json.RawMessage `json:"code"`
+}
+
+// DecodeError consumes a bounded non-success response and normalizes it.
+func DecodeError(response *http.Response, provider, operation string, limit int64, redact []string) error {
+	if response == nil {
+		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "missing_response", Message: "HTTP transport returned no response"}
+	}
+	if response.Body == nil {
+		kind, retryable := statusKind(response.StatusCode)
+		return &models.Error{Kind: kind, Provider: provider, Operation: operation, HTTPStatus: response.StatusCode, Message: http.StatusText(response.StatusCode), RequestID: RequestID(response.Header), Retryable: retryable}
+	}
+	defer response.Body.Close()
+	data, exceeded, readErr := readBounded(response.Body, limit)
+	message := http.StatusText(response.StatusCode)
+	code := ""
+	if readErr == nil && !exceeded {
+		var envelope errorEnvelope
+		if json.Unmarshal(data, &envelope) == nil {
+			if envelope.Error.Message != "" {
+				message = envelope.Error.Message
+			} else if envelope.Message != "" {
+				message = envelope.Message
+			}
+			code = rawCode(envelope.Error.Code)
+			if code == "" {
+				code = envelope.Error.Type
+			}
+			if code == "" {
+				code = envelope.Error.Status
+			}
+			if code == "" {
+				code = rawCode(envelope.Code)
+			}
+			if code == "" {
+				code = envelope.Type
+			}
+		} else if len(bytes.TrimSpace(data)) > 0 {
+			message = "provider returned a non-JSON error response"
+		}
+	} else if exceeded {
+		message = fmt.Sprintf("provider error response exceeds %d bytes", limit)
+	} else if readErr != nil {
+		message = "failed to read provider error response"
+	}
+	for _, secret := range redact {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+			code = strings.ReplaceAll(code, secret, "[REDACTED]")
+		}
+	}
+	kind, retryable := statusKind(response.StatusCode)
+	return &models.Error{
+		Kind: kind, Provider: provider, Operation: operation,
+		HTTPStatus: response.StatusCode, Code: code, Message: message,
+		RequestID: RequestID(response.Header), RetryAfter: retryAfter(response.Header.Get("Retry-After")), Retryable: retryable,
+		Cause: readErr,
+	}
+}
+
+func statusKind(status int) (models.ErrorKind, bool) {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return models.ErrorInvalidRequest, false
+	case http.StatusUnauthorized:
+		return models.ErrorAuthentication, false
+	case http.StatusForbidden:
+		return models.ErrorPermission, false
+	case http.StatusNotFound:
+		return models.ErrorNotFound, false
+	case http.StatusConflict:
+		return models.ErrorConflict, false
+	case http.StatusTooManyRequests:
+		return models.ErrorRateLimited, true
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return models.ErrorTimeout, true
+	case http.StatusBadGateway, http.StatusServiceUnavailable:
+		return models.ErrorUnavailable, true
+	default:
+		if status >= 500 {
+			return models.ErrorUnavailable, true
+		}
+		return models.ErrorUnknown, false
+	}
+}
+
+func rawCode(raw json.RawMessage) string {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var number json.Number
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&number) == nil {
+		return number.String()
+	}
+	return ""
+}
+
+func retryAfter(value string) time.Duration {
+	if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if duration := time.Until(when); duration > 0 {
+			return duration
+		}
+	}
+	return 0
+}
+
+// RequestID returns a safely public provider request identifier.
+func RequestID(header http.Header) string {
+	for _, name := range []string{"x-request-id", "request-id", "x-goog-request-id"} {
+		if value := header.Get(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}

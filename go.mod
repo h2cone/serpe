@@ -1,3 +1,3 @@
-module github.com/tw8ap/ouro
+module github.com/h2cone/ouro
 
-go 1.22
+go 1.26.5
