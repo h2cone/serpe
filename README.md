@@ -3,12 +3,17 @@
 `ouro` is a provider-neutral Go library for invoking language models through a
 small canonical request, response, and streaming API.
 
-The current adapters support:
+Supported protocols:
 
 - OpenAI Responses
 - OpenAI Chat Completions
 - Anthropic Messages
 - Gemini GenerateContent
+
+Each protocol can run on either the **default** built-in HTTP/JSON/SSE Driver
+or the corresponding **official vendor Go SDK** Driver. Callers always use
+`models.Request`, `models.Response`, `models.Stream`, and `models.Error`; SDK
+types never appear in the public API.
 
 ## Requirements
 
@@ -21,7 +26,24 @@ The current adapters support:
 go get github.com/h2cone/ouro
 ```
 
-## Quick start
+The root module pins the official OpenAI, Anthropic, and Google Gen AI SDKs so
+`Config.Driver = providers.DriverOfficialSDK` works without blank imports or
+build tags. Default-Driver callers still resolve those modules; this is the
+cost of config-only switching.
+
+Verified SDK versions (upgrade one at a time and re-run the full differential
+contract suite):
+
+| Vendor | Module | Version |
+| --- | --- | --- |
+| OpenAI | `github.com/openai/openai-go/v3` | v3.49.0 |
+| Anthropic | `github.com/anthropics/anthropic-sdk-go` | v1.61.0 |
+| Google Gen AI | `google.golang.org/genai` | v1.66.0 |
+
+## Quick start (default Driver)
+
+Omitting `Driver` (or setting `DriverDefault`) uses the library's native
+HTTP/JSON/SSE adapters. Existing call sites need no migration:
 
 ```go
 package main
@@ -58,10 +80,33 @@ func main() {
 }
 ```
 
-Configuration never reads environment variables automatically. Pass an API key
-or a custom authenticator explicitly. `BaseURL` may be either an origin or an
-API path prefix; for example, both `https://api.openai.com` and
-`https://api.openai.com/v1` are accepted without producing a duplicated `/v1`.
+## Official SDK Driver
+
+Set `Driver: providers.DriverOfficialSDK` to route Complete and Stream through
+the vendor SDK for the selected protocol. There is **no automatic fallback** to
+the default Driver if the SDK fails:
+
+```go
+provider, err := providers.New(providers.Config{
+	Protocol: providers.AnthropicMessages,
+	Driver:   providers.DriverOfficialSDK,
+	APIKey:   apiKey,
+})
+```
+
+`Protocol` already selects the vendor; a single `DriverOfficialSDK` value covers
+OpenAI, Anthropic, and Gemini. Bound models are immutable: Complete and Stream
+always use the Driver chosen at `providers.New`.
+
+Configuration never reads environment variables automatically for either Driver
+(including `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and base URL
+env vars). Pass an API key or a custom authenticator explicitly. Official SDK
+default retries are disabled so generation POSTs still make exactly one HTTP
+attempt unless the caller implements retry outside this package.
+
+`BaseURL` may be either an origin or an API path prefix; for example, both
+`https://api.openai.com` and `https://api.openai.com/v1` are accepted without
+producing a duplicated `/v1`.
 
 Streams use a pull API with one reader. Consume them to completion to obtain the
 normalized response:

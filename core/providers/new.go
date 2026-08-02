@@ -11,6 +11,8 @@ import (
 
 	"github.com/h2cone/ouro/core/providers/internal/anthropic"
 	"github.com/h2cone/ouro/core/providers/internal/gemini/generatecontent"
+	"github.com/h2cone/ouro/core/providers/internal/httpx"
+	"github.com/h2cone/ouro/core/providers/internal/official"
 	"github.com/h2cone/ouro/core/providers/internal/openai/chatcompletions"
 	"github.com/h2cone/ouro/core/providers/internal/openai/responses"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
@@ -23,14 +25,31 @@ const (
 	defaultMaxProviderStateBytes = 2 << 20
 )
 
-// New validates and freezes configuration, selects one concrete adapter, and
-// returns a Provider. It performs no network operation.
+// New validates and freezes configuration, selects one concrete Driver and
+// protocol adapter, and returns a Provider. It performs no network operation.
+// Driver selection is fixed for the lifetime of the returned Provider; bound
+// models use that Driver for both Complete and Stream.
 func New(config Config) (Provider, error) {
 	internal, err := normalizeConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	switch config.Protocol {
+	driver, err := normalizeDriver(config.Driver)
+	if err != nil {
+		return nil, err
+	}
+	switch driver {
+	case DriverDefault:
+		return newDefaultProvider(config.Protocol, internal)
+	case DriverOfficialSDK:
+		return newOfficialProvider(config.Protocol, internal)
+	default:
+		return nil, fmt.Errorf("providers: unknown driver %q", driver)
+	}
+}
+
+func newDefaultProvider(protocol Protocol, internal shared.Config) (Provider, error) {
+	switch protocol {
 	case OpenAIChatCompletions:
 		return chatcompletions.New(internal), nil
 	case OpenAIResponses:
@@ -40,8 +59,12 @@ func New(config Config) (Provider, error) {
 	case GeminiGenerateContent:
 		return generatecontent.New(internal), nil
 	default:
-		return nil, fmt.Errorf("providers: unknown protocol %q", config.Protocol)
+		return nil, fmt.Errorf("providers: unknown protocol %q", protocol)
 	}
+}
+
+func newOfficialProvider(protocol Protocol, internal shared.Config) (Provider, error) {
+	return official.New(official.Protocol(protocol), internal)
 }
 
 func normalizeConfig(config Config) (shared.Config, error) {
@@ -112,7 +135,7 @@ func normalizeConfig(config Config) (shared.Config, error) {
 		}
 	}
 	return shared.Config{
-		Protocol: string(config.Protocol), Provider: provider, BaseURL: parsed,
+		Provider: provider, BaseURL: parsed,
 		HTTPClient: doer, Authenticate: authenticate, Headers: headers,
 		Limits: limits,
 		Policy: shared.Policy{
@@ -174,16 +197,9 @@ func normalizeLimits(input Limits) (shared.Limits, error) {
 	}, nil
 }
 
-var reservedHeaders = map[string]struct{}{
-	"authorization": {}, "proxy-authorization": {}, "x-api-key": {}, "x-goog-api-key": {},
-	"host": {}, "content-length": {}, "content-type": {}, "accept": {},
-	"anthropic-version": {}, "x-request-id": {}, "x-client-request-id": {},
-}
-
 func validateHeaders(headers http.Header) error {
 	for name, values := range headers {
-		canonical := strings.ToLower(name)
-		if _, reserved := reservedHeaders[canonical]; reserved {
+		if httpx.ReservedHeader(name) {
 			return fmt.Errorf("providers: custom header %q is reserved", name)
 		}
 		if name == "" || strings.IndexFunc(name, func(r rune) bool {

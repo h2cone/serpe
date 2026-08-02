@@ -30,25 +30,32 @@ func TestAdaptersUnaryStreamConformance(t *testing.T) {
 		{name: "anthropic", protocol: providers.AnthropicMessages, modelID: "model-1", unaryPath: "/v1/messages", streamPath: "/v1/messages"},
 		{name: "gemini", protocol: providers.GeminiGenerateContent, modelID: "gemini-2.0-flash", unaryPath: "/v1beta/models/gemini-2.0-flash:generateContent", streamPath: "/v1beta/models/gemini-2.0-flash:streamGenerateContent"},
 	}
+	drivers := []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			for _, tool := range []bool{false, true} {
-				tool := tool
-				name := "text"
-				if tool {
-					name = "tool"
-				}
-				t.Run(name, func(t *testing.T) {
-					runConformanceCase(t, test.protocol, test.modelID, test.unaryPath, test.streamPath, tool)
+			for _, driver := range drivers {
+				driver := driver
+				t.Run(string(driver), func(t *testing.T) {
+					t.Parallel()
+					for _, tool := range []bool{false, true} {
+						tool := tool
+						name := "text"
+						if tool {
+							name = "tool"
+						}
+						t.Run(name, func(t *testing.T) {
+							runConformanceCase(t, test.protocol, driver, test.modelID, test.unaryPath, test.streamPath, tool)
+						})
+					}
 				})
 			}
 		})
 	}
 }
 
-func runConformanceCase(t *testing.T, protocol providers.Protocol, modelID, unaryPath, streamPath string, tool bool) {
+func runConformanceCase(t *testing.T, protocol providers.Protocol, driver providers.Driver, modelID, unaryPath, streamPath string, tool bool) {
 	t.Helper()
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -71,6 +78,10 @@ func runConformanceCase(t *testing.T, protocol providers.Protocol, modelID, unar
 		stream := strings.Contains(request.URL.Path, ":streamGenerateContent")
 		if raw, exists := envelope["stream"]; exists {
 			_ = json.Unmarshal(raw, &stream)
+		}
+		// Official OpenAI/Anthropic streaming constructors set stream:true via SDK.
+		if strings.Contains(request.Header.Get("Accept"), "text/event-stream") {
+			stream = true
 		}
 		expectedPath := unaryPath
 		if stream {
@@ -97,6 +108,9 @@ func runConformanceCase(t *testing.T, protocol providers.Protocol, modelID, unar
 			t.Errorf("wire tools present = %v, want %v", hasTools, tool)
 		}
 		assertAuthHeaders(t, protocol, request.Header)
+		if request.Header.Get("X-Request-ID") != "client-request" {
+			t.Errorf("X-Request-ID = %q, want client-request", request.Header.Get("X-Request-ID"))
+		}
 		writer.Header().Set("X-Request-ID", "provider-request")
 		if stream {
 			writer.Header().Set("Content-Type", "text/event-stream")
@@ -108,7 +122,10 @@ func runConformanceCase(t *testing.T, protocol providers.Protocol, modelID, unar
 	}))
 	defer server.Close()
 
-	provider, err := providers.New(providers.Config{Protocol: protocol, BaseURL: server.URL, APIKey: "test-secret", HTTPClient: server.Client()})
+	provider, err := providers.New(providers.Config{
+		Protocol: protocol, Driver: driver, BaseURL: server.URL,
+		APIKey: "test-secret", HTTPClient: server.Client(),
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -149,9 +166,9 @@ func runConformanceCase(t *testing.T, protocol providers.Protocol, modelID, unar
 		t.Fatalf("unary/stream mismatch\nunary: %s\nstream: %s", unaryJSON, streamJSON)
 	}
 	if tool {
-		calls := streamed.ToolCalls()
-		if len(calls) != 1 || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"x":1}` {
-			t.Fatalf("tool calls = %#v", calls)
+		toolCalls := streamed.ToolCalls()
+		if len(toolCalls) != 1 || toolCalls[0].Name != "lookup" || string(toolCalls[0].Arguments) != `{"x":1}` {
+			t.Fatalf("tool calls = %#v", toolCalls)
 		}
 	} else if unary.Text() != "Hello" || deltas.String() != "Hello" {
 		t.Fatalf("text unary=%q stream deltas=%q", unary.Text(), deltas.String())
@@ -257,26 +274,28 @@ func streamFixture(protocol providers.Protocol, tool bool) string {
 			terminal, "",
 		}, "\n\n")
 	case providers.AnthropicMessages:
-		start := `data: {"type":"message_start","message":{"id":"resp-1","type":"message","role":"assistant","model":"model-1","content":[],"stop_reason":null,"usage":{"input_tokens":2,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
+		// Official Anthropic SDK stream decoder requires the SSE event: field
+		// (matching production wire format). Default adapters also accept it.
+		start := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"resp-1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"model-1\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":2,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}"
 		if tool {
 			return strings.Join([]string{
 				start,
-				`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}`,
-				`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"x\":"}}`,
-				`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"1}"}}`,
-				`data: {"type":"content_block_stop","index":0}`,
-				`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}`,
-				`data: {"type":"message_stop"}`, "",
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":\"lookup\",\"input\":{}}}",
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"x\\\":\"}}",
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"1}\"}}",
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}",
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}", "",
 			}, "\n\n")
 		}
 		return strings.Join([]string{
 			start,
-			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
-			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}`,
-			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}`,
-			`data: {"type":"content_block_stop","index":0}`,
-			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
-			`data: {"type":"message_stop"}`, "",
+			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}",
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}",
+			"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}",
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}", "",
 		}, "\n\n")
 	case providers.GeminiGenerateContent:
 		if tool {

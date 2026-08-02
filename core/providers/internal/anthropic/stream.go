@@ -52,6 +52,12 @@ func newMessageSource(reader *sse.Reader, requestID, fallbackModel string, ignor
 	return &messageSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, ignoreUnknown: ignoreUnknown, stateLimit: stateLimit, blocks: make(map[int]*blockState), stateBlocks: make(map[int]json.RawMessage), finish: models.FinishUnknown}
 }
 
+// NewSSEStreamSource builds an Anthropic event source from a raw SSE response
+// obtained through an official SDK request.
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, ignoreUnknown bool, stateLimit int64) models.EventSource {
+	return newMessageSource(reader, requestID, fallbackModel, ignoreUnknown, stateLimit)
+}
+
 func (s *messageSource) Next() (models.Event, error) {
 	for {
 		if event, ok := s.queue.Shift(); ok {
@@ -287,7 +293,11 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 }
 
 func (s *messageSource) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.reader.Close() })
+	s.closeOnce.Do(func() {
+		if s.reader != nil {
+			s.closeErr = s.reader.Close()
+		}
+	})
 	return s.closeErr
 }
 

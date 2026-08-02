@@ -45,37 +45,90 @@ func TestHTTPErrorNormalizationAndRedaction(t *testing.T) {
 func TestResponseAndSSELimits(t *testing.T) {
 	t.Parallel()
 	t.Run("unary", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(writer, `{"id":"`+strings.Repeat("x", 256)+`"}`)
-		}))
-		defer server.Close()
-		model := boundTestModel(t, providers.OpenAIResponses, server, "model-1", providers.Config{Limits: providers.Limits{MaxResponseBytes: 32}})
-		_, err := model.Complete(context.Background(), models.NewTextRequest("hello"))
-		var modelErr *models.Error
-		if !errors.As(err, &modelErr) || modelErr.Kind != models.ErrorProtocol || modelErr.Code != "response_too_large" {
-			t.Fatalf("error = %#v", err)
+		for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+			driver := driver
+			t.Run(string(driver), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+					writer.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(writer, `{"id":"`+strings.Repeat("x", 256)+`"}`)
+				}))
+				defer server.Close()
+				model := boundTestModel(t, providers.OpenAIResponses, server, "model-1", providers.Config{
+					Driver: driver,
+					Limits: providers.Limits{MaxResponseBytes: 32},
+				})
+				_, err := model.Complete(context.Background(), models.NewTextRequest("hello"))
+				var modelErr *models.Error
+				if !errors.As(err, &modelErr) || modelErr.Kind != models.ErrorProtocol || modelErr.Code != "response_too_large" || modelErr.Retryable {
+					t.Fatalf("error = %#v", err)
+				}
+			})
 		}
 	})
 	t.Run("sse", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			writer.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(writer, "data: "+strings.Repeat("x", 128)+"\n\n")
-		}))
-		defer server.Close()
-		model := boundTestModel(t, providers.OpenAIChatCompletions, server, "model-1", providers.Config{Limits: providers.Limits{MaxSSEEventBytes: 32}})
-		stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer stream.Close()
-		for stream.Next() {
-		}
-		var modelErr *models.Error
-		if !errors.As(stream.Err(), &modelErr) || modelErr.Kind != models.ErrorProtocol || modelErr.Code != "sse_read_error" {
-			t.Fatalf("stream error = %#v", stream.Err())
+		for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+			driver := driver
+			t.Run(string(driver), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+					writer.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(writer, "data: "+strings.Repeat("x", 128)+"\n\n")
+				}))
+				defer server.Close()
+				model := boundTestModel(t, providers.OpenAIChatCompletions, server, "model-1", providers.Config{
+					Driver: driver,
+					Limits: providers.Limits{MaxSSEEventBytes: 32},
+				})
+				stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stream.Close()
+				for stream.Next() {
+				}
+				var modelErr *models.Error
+				if !errors.As(stream.Err(), &modelErr) || modelErr.Kind != models.ErrorProtocol || modelErr.Code != "sse_read_error" {
+					t.Fatalf("stream error = %#v", stream.Err())
+				}
+			})
 		}
 	})
+}
+
+func TestSSELimitResetsAcrossCRLFEvents(t *testing.T) {
+	t.Parallel()
+	body := strings.Join([]string{
+		`data: {"id":"r","model":"m","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}`,
+		`data: {"id":"r","model":"m","choices":[{"index":0,"delta":{"content":"b"},"finish_reason":null}]}`,
+		`data: {"id":"r","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"data: [DONE]", "",
+	}, "\r\n\r\n")
+	for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+		driver := driver
+		t.Run(string(driver), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(writer, body)
+			}))
+			defer server.Close()
+			model := boundTestModel(t, providers.OpenAIChatCompletions, server, "model-1", providers.Config{
+				Driver: driver,
+				Limits: providers.Limits{MaxSSEEventBytes: 128},
+			})
+			stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
+			if err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			defer stream.Close()
+			for stream.Next() {
+			}
+			if err := stream.Err(); err != nil {
+				t.Fatalf("stream Err: %v", err)
+			}
+			if response := stream.Response(); response == nil || response.Text() != "ab" {
+				t.Fatalf("response = %#v", response)
+			}
+		})
+	}
 }
 
 func TestProviderStreamsRejectUnexpectedEOF(t *testing.T) {
@@ -90,26 +143,31 @@ func TestProviderStreamsRejectUnexpectedEOF(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(string(test.protocol), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-				writer.Header().Set("Content-Type", "text/event-stream")
-				_, _ = io.WriteString(writer, test.body)
-			}))
-			defer server.Close()
-			modelID := "model-1"
-			if test.protocol == providers.GeminiGenerateContent {
-				modelID = "gemini-2.0-flash"
-			}
-			model := boundTestModel(t, test.protocol, server, modelID, providers.Config{})
-			stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer stream.Close()
-			for stream.Next() {
-			}
-			var modelErr *models.Error
-			if !errors.As(stream.Err(), &modelErr) || modelErr.Kind != models.ErrorProtocol || modelErr.Code != "unexpected_eof" {
-				t.Fatalf("stream error = %#v", stream.Err())
+			for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+				driver := driver
+				t.Run(string(driver), func(t *testing.T) {
+					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+						writer.Header().Set("Content-Type", "text/event-stream")
+						_, _ = io.WriteString(writer, test.body)
+					}))
+					defer server.Close()
+					modelID := "model-1"
+					if test.protocol == providers.GeminiGenerateContent {
+						modelID = "gemini-2.0-flash"
+					}
+					model := boundTestModel(t, test.protocol, server, modelID, providers.Config{Driver: driver})
+					stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer stream.Close()
+					for stream.Next() {
+					}
+					var modelErr *models.Error
+					if !errors.As(stream.Err(), &modelErr) || modelErr.Kind != models.ErrorProtocol || modelErr.Code != "unexpected_eof" {
+						t.Fatalf("stream error = %#v", stream.Err())
+					}
+				})
 			}
 		})
 	}
@@ -169,6 +227,62 @@ func TestUnknownStreamEventPolicy(t *testing.T) {
 			}
 			if (stream.Err() != nil) != test.wantErr {
 				t.Fatalf("stream error = %v, wantErr %v", stream.Err(), test.wantErr)
+			}
+		})
+	}
+}
+
+func TestAnthropicUnknownTopLevelEventPolicy(t *testing.T) {
+	t.Parallel()
+	body := strings.Join([]string{
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"r1\",\"model\":\"model-1\",\"role\":\"assistant\",\"content\":[]}}",
+		"event: future_optional_event\ndata: {\"type\":\"future_optional_event\",\"value\":1}",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}", "",
+	}, "\n\n")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, body)
+	}))
+	defer server.Close()
+
+	for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+		driver := driver
+		t.Run(string(driver), func(t *testing.T) {
+			for _, test := range []struct {
+				name    string
+				policy  providers.UnknownEventPolicy
+				wantErr bool
+			}{
+				{name: "strict", policy: providers.UnknownEventError, wantErr: true},
+				{name: "ignore", policy: providers.UnknownEventIgnore},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					model := boundTestModel(t, providers.AnthropicMessages, server, "model-1", providers.Config{
+						Driver: driver,
+						Policy: providers.Policy{UnknownEvent: test.policy},
+					})
+					request := models.NewTextRequest("hello")
+					request.Generation.MaxOutputTokens = models.Some(16)
+					stream, err := model.Stream(context.Background(), request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for stream.Next() {
+					}
+					streamErr := stream.Err()
+					_ = stream.Close()
+					if test.wantErr {
+						var modelErr *models.Error
+						if !errors.As(streamErr, &modelErr) || modelErr.Code != "unknown_event" {
+							t.Fatalf("stream error = %#v", streamErr)
+						}
+						return
+					}
+					if streamErr != nil {
+						t.Fatalf("stream error = %v", streamErr)
+					}
+				})
 			}
 		})
 	}
@@ -1201,27 +1315,161 @@ func TestProviderStateRoundTripUsesSemanticToolArguments(t *testing.T) {
 	}
 }
 
+func TestOfficialGeminiCloseUnblocksConcurrentNext(t *testing.T) {
+	t.Parallel()
+	body := newBlockingSSEBody(`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}],"modelVersion":"gemini-test","responseId":"r1"}` + "\n\n")
+	provider, err := providers.New(providers.Config{
+		Protocol: providers.GeminiGenerateContent,
+		Driver:   providers.DriverOfficialSDK,
+		BaseURL:  "https://gemini.invalid",
+		APIKey:   "test-secret",
+		HTTPClient: doerFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       body,
+				Request:    request,
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	model, err := provider.Model("gemini-test")
+	if err != nil {
+		t.Fatalf("Model: %v", err)
+	}
+	request := models.NewTextRequest("hello")
+	request.Generation.MaxOutputTokens = models.Some(16)
+	stream, err := model.Stream(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range 3 {
+		if !stream.Next() {
+			t.Fatalf("initial stream event missing: %v", stream.Err())
+		}
+	}
+
+	nextDone := make(chan struct{})
+	go func() {
+		defer close(nextDone)
+		_ = stream.Next()
+	}()
+	select {
+	case <-body.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not block on the streaming body")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- stream.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock concurrent Next")
+	}
+	select {
+	case <-nextDone:
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after Close")
+	}
+}
+
+type blockingSSEBody struct {
+	mu        sync.Mutex
+	first     []byte
+	blocked   chan struct{}
+	closed    chan struct{}
+	blockOnce sync.Once
+	closeOnce sync.Once
+}
+
+func newBlockingSSEBody(first string) *blockingSSEBody {
+	return &blockingSSEBody{
+		first:   []byte(first),
+		blocked: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+}
+
+func (b *blockingSSEBody) Read(buffer []byte) (int, error) {
+	b.mu.Lock()
+	if len(b.first) > 0 {
+		n := copy(buffer, b.first)
+		b.first = b.first[n:]
+		b.mu.Unlock()
+		return n, nil
+	}
+	b.mu.Unlock()
+	b.blockOnce.Do(func() { close(b.blocked) })
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingSSEBody) Close() error {
+	b.closeOnce.Do(func() { close(b.closed) })
+	return nil
+}
+
 func TestBoundModelConcurrentReuse(t *testing.T) {
+	t.Parallel()
+	for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+		driver := driver
+		t.Run(string(driver), func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, unaryFixture(providers.OpenAIResponses, false))
+			}))
+			defer server.Close()
+			model := boundTestModel(t, providers.OpenAIResponses, server, "model-1", providers.Config{Driver: driver})
+			request := models.NewTextRequest("hello")
+			var wait sync.WaitGroup
+			for range 32 {
+				wait.Add(1)
+				go func() {
+					defer wait.Done()
+					response, err := model.Complete(context.Background(), request)
+					if err != nil || response.Text() != "Hello" {
+						t.Errorf("Complete = %#v, %v", response, err)
+					}
+				}()
+			}
+			wait.Wait()
+		})
+	}
+}
+
+func TestOfficialSDKHTTPErrorNormalization(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, unaryFixture(providers.OpenAIResponses, false))
+		writer.Header().Set("Retry-After", "2")
+		writer.Header().Set("X-Request-ID", "request-429")
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(writer, `{"error":{"message":"key test-secret was rejected","code":"rate_limit","type":"rate_limit_error"}}`)
 	}))
 	defer server.Close()
-	model := boundTestModel(t, providers.OpenAIResponses, server, "model-1", providers.Config{})
-	request := models.NewTextRequest("hello")
-	var wait sync.WaitGroup
-	for range 32 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			response, err := model.Complete(context.Background(), request)
-			if err != nil || response.Text() != "Hello" {
-				t.Errorf("Complete = %#v, %v", response, err)
-			}
-		}()
+	model := boundTestModel(t, providers.OpenAIResponses, server, "model-1", providers.Config{
+		Driver: providers.DriverOfficialSDK,
+		APIKey: "test-secret",
+	})
+	_, err := model.Complete(context.Background(), models.NewTextRequest("hello"))
+	var modelErr *models.Error
+	if !errors.As(err, &modelErr) {
+		t.Fatalf("error = %#v", err)
 	}
-	wait.Wait()
+	if modelErr.Kind != models.ErrorRateLimited || !modelErr.Retryable || modelErr.HTTPStatus != 429 {
+		t.Fatalf("normalized error = %#v", modelErr)
+	}
+	if strings.Contains(modelErr.Error(), "test-secret") {
+		t.Fatalf("secret was not redacted: %v", modelErr)
+	}
 }
 
 func boundTestModel(t *testing.T, protocol providers.Protocol, server *httptest.Server, modelID string, overrides providers.Config) models.Model {

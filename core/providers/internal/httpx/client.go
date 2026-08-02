@@ -102,6 +102,9 @@ func (c *Client) Do(ctx context.Context, operation, endpoint string, query url.V
 		}
 		return nil, &models.Error{Kind: models.ErrorUnavailable, Provider: c.provider, Operation: operation, Message: "HTTP transport failed", Cause: err, Retryable: true}
 	}
+	if response == nil {
+		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: c.provider, Operation: operation, Code: "missing_response", Message: "HTTP transport returned no response"}
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, DecodeError(response, c.provider, operation, c.maxErrorResponseBytes, c.redact)
 	}
@@ -109,7 +112,7 @@ func (c *Client) Do(ctx context.Context, operation, endpoint string, query url.V
 	if stream {
 		expected = "text/event-stream"
 	}
-	if c.requireContentType && !hasMediaType(response.Header.Get("Content-Type"), expected) {
+	if c.requireContentType && !HasMediaType(response.Header.Get("Content-Type"), expected) {
 		DrainAndClose(response.Body, 4096)
 		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: c.provider, Operation: operation, Code: "unexpected_content_type", HTTPStatus: response.StatusCode, RequestID: RequestID(response.Header), Message: fmt.Sprintf("expected %s response", expected)}
 	}
@@ -135,9 +138,24 @@ func validEndpoint(endpoint string) bool {
 	return strings.HasPrefix(endpoint, "/") && !strings.HasPrefix(endpoint, "//") && !strings.ContainsAny(endpoint, "\\?#")
 }
 
-func hasMediaType(value, expected string) bool {
+// HasMediaType reports whether a Content-Type value has the expected media
+// type, ignoring parameters and ASCII case.
+func HasMediaType(value, expected string) bool {
 	mediaType, _, err := mime.ParseMediaType(value)
 	return err == nil && strings.EqualFold(mediaType, expected)
+}
+
+// ReservedHeader reports whether a Config header is owned by provider
+// transport policy and therefore cannot be supplied as a custom header.
+func ReservedHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "authorization", "proxy-authorization", "x-api-key", "x-goog-api-key",
+		"host", "content-length", "content-type", "accept",
+		"anthropic-version", "x-request-id", "x-client-request-id":
+		return true
+	default:
+		return false
+	}
 }
 
 // DrainAndClose performs a bounded drain and closes body.

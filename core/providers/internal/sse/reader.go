@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -22,10 +23,13 @@ type Event struct {
 
 // Reader parses SSE events synchronously in the caller's goroutine.
 type Reader struct {
-	reader  *bufio.Reader
-	closer  io.Closer
-	maxSize int64
-	lastID  string
+	reader    *bufio.Reader
+	closer    io.Closer
+	closeFn   func() error
+	maxSize   int64
+	lastID    string
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewReader creates a bounded SSE reader. maxEventBytes includes field names,
@@ -35,6 +39,16 @@ func NewReader(reader io.Reader, maxEventBytes int64) *Reader {
 	if closer, ok := reader.(io.Closer); ok {
 		result.closer = closer
 	}
+	return result
+}
+
+// NewReaderWithClose creates a bounded SSE reader and runs closeFn before
+// closing the underlying reader. This lets protocol-neutral transport cleanup
+// stay at the stream boundary without adding a second close channel to every
+// provider event source.
+func NewReaderWithClose(reader io.Reader, maxEventBytes int64, closeFn func() error) *Reader {
+	result := NewReader(reader, maxEventBytes)
+	result.closeFn = closeFn
 	return result
 }
 
@@ -163,8 +177,15 @@ func splitField(line []byte) (string, string) {
 
 // Close closes the underlying body when it implements io.Closer.
 func (r *Reader) Close() error {
-	if r.closer != nil {
-		return r.closer.Close()
-	}
-	return nil
+	r.closeOnce.Do(func() {
+		if r.closeFn != nil {
+			r.closeErr = r.closeFn()
+		}
+		if r.closer != nil {
+			if err := r.closer.Close(); r.closeErr == nil {
+				r.closeErr = err
+			}
+		}
+	})
+	return r.closeErr
 }

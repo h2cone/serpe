@@ -52,6 +52,12 @@ func newGeminiSource(reader *sse.Reader, requestID, fallbackModel string, stateL
 	return &geminiSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, stateLimit: stateLimit, candidates: make(map[int]*geminiCandidateState)}
 }
 
+// NewSSEStreamSource builds a Gemini event source from a raw SSE response
+// obtained through an official SDK request.
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, stateLimit int64) models.EventSource {
+	return newGeminiSource(reader, requestID, fallbackModel, stateLimit)
+}
+
 func (s *geminiSource) Next() (models.Event, error) {
 	for {
 		if event, ok := s.queue.Shift(); ok {
@@ -60,31 +66,33 @@ func (s *geminiSource) Next() (models.Event, error) {
 		if s.finished {
 			return models.Event{}, io.EOF
 		}
-		wireEvent, err := s.reader.Next()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
+		wireEvent, readErr := s.reader.Next()
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
 				if !s.hasTerminalEvidence() {
 					return models.Event{}, io.EOF
 				}
-				if err := s.complete(); err != nil {
-					return models.Event{}, err
+				if completeErr := s.complete(); completeErr != nil {
+					return models.Event{}, completeErr
 				}
 				s.finished = true
 				continue
 			}
-			return models.Event{}, streamProtocol("sse_read_error", "failed to parse Gemini SSE event", err)
+			return models.Event{}, streamProtocol("sse_read_error", "failed to parse Gemini SSE event", readErr)
 		}
-		if len(wireEvent.Data) == 0 {
+		data := wireEvent.Data
+		eventID := wireEvent.ID
+		if len(data) == 0 {
 			continue
 		}
 		var response responseWire
-		if err := json.Unmarshal(wireEvent.Data, &response); err != nil {
+		if err := json.Unmarshal(data, &response); err != nil {
 			return models.Event{}, streamProtocol("invalid_json", "Gemini stream event is not valid JSON", err)
 		}
 		if response.Error != nil {
 			return models.Event{}, normalizeWireError(response.Error, "stream_next", s.requestID)
 		}
-		if err := s.consume(response, wireEvent.ID); err != nil {
+		if err := s.consume(response, eventID); err != nil {
 			return models.Event{}, err
 		}
 	}
@@ -317,7 +325,11 @@ func (s *geminiSource) complete() error {
 }
 
 func (s *geminiSource) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.reader.Close() })
+	s.closeOnce.Do(func() {
+		if s.reader != nil {
+			s.closeErr = s.reader.Close()
+		}
+	})
 	return s.closeErr
 }
 

@@ -75,8 +75,40 @@ func TestReaderResetsLimitAfterCommentBlock(t *testing.T) {
 	}
 }
 
+func TestReaderCloseRunsHookBeforeBodyOnce(t *testing.T) {
+	t.Parallel()
+	wantErr := errors.New("hook failed")
+	var order []string
+	body := &recordingReadCloser{
+		Reader: strings.NewReader(""),
+		close:  func() error { order = append(order, "body"); return errors.New("body failed") },
+	}
+	reader := NewReaderWithClose(body, 64, func() error {
+		order = append(order, "hook")
+		return wantErr
+	})
+	if err := reader.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("Close error = %v, want hook error", err)
+	}
+	if err := reader.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("second Close error = %v, want hook error", err)
+	}
+	if got := strings.Join(order, ","); got != "hook,body" {
+		t.Fatalf("close order = %q", got)
+	}
+}
+
 type oneByteReader struct {
 	data []byte
+}
+
+type recordingReadCloser struct {
+	io.Reader
+	close func() error
+}
+
+func (r *recordingReadCloser) Close() error {
+	return r.close()
 }
 
 func (r *oneByteReader) Read(target []byte) (int, error) {

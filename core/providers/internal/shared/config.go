@@ -33,7 +33,6 @@ type Policy struct {
 
 // Config is defensively copied and immutable after construction.
 type Config struct {
-	Protocol     string
 	Provider     string
 	BaseURL      *url.URL
 	HTTPClient   Doer

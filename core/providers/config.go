@@ -23,6 +23,10 @@ type Limits struct {
 // is supplied later to Provider.Model.
 type Config struct {
 	Protocol Protocol
+	// Driver selects default HTTP/SSE adapters or the official vendor SDK.
+	// The zero value is DriverDefault and is fully equivalent to an explicit
+	// DriverDefault. Unknown values fail in New.
+	Driver Driver
 	// BaseURL may be an origin or a path prefix such as
 	// https://api.openai.com/v1. A version prefix shared with the selected
 	// protocol endpoint is joined only once.

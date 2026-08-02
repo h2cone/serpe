@@ -53,6 +53,12 @@ func newChatSource(reader *sse.Reader, requestID, fallbackModel string) *chatSou
 	return &chatSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, choices: make(map[int]*choiceStreamState)}
 }
 
+// NewSSEStreamSource builds a Chat Completions event source from a raw SSE
+// response obtained through an official SDK request.
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string) models.EventSource {
+	return newChatSource(reader, requestID, fallbackModel)
+}
+
 func (s *chatSource) Next() (models.Event, error) {
 	for {
 		if event, ok := s.queue.Shift(); ok {
@@ -248,6 +254,10 @@ func (s *chatSource) complete(eventID string) error {
 }
 
 func (s *chatSource) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.reader.Close() })
+	s.closeOnce.Do(func() {
+		if s.reader != nil {
+			s.closeErr = s.reader.Close()
+		}
+	})
 	return s.closeErr
 }

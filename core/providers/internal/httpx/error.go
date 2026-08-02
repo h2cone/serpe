@@ -30,7 +30,7 @@ func DecodeError(response *http.Response, provider, operation string, limit int6
 		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "missing_response", Message: "HTTP transport returned no response"}
 	}
 	if response.Body == nil {
-		kind, retryable := statusKind(response.StatusCode)
+		kind, retryable := StatusKind(response.StatusCode)
 		return &models.Error{Kind: kind, Provider: provider, Operation: operation, HTTPStatus: response.StatusCode, Message: http.StatusText(response.StatusCode), RequestID: RequestID(response.Header), Retryable: retryable}
 	}
 	defer response.Body.Close()
@@ -66,22 +66,20 @@ func DecodeError(response *http.Response, provider, operation string, limit int6
 	} else if readErr != nil {
 		message = "failed to read provider error response"
 	}
-	for _, secret := range redact {
-		if secret != "" {
-			message = strings.ReplaceAll(message, secret, "[REDACTED]")
-			code = strings.ReplaceAll(code, secret, "[REDACTED]")
-		}
-	}
-	kind, retryable := statusKind(response.StatusCode)
+	message = Redact(message, redact)
+	code = Redact(code, redact)
+	kind, retryable := StatusKind(response.StatusCode)
 	return &models.Error{
 		Kind: kind, Provider: provider, Operation: operation,
 		HTTPStatus: response.StatusCode, Code: code, Message: message,
-		RequestID: RequestID(response.Header), RetryAfter: retryAfter(response.Header.Get("Retry-After")), Retryable: retryable,
+		RequestID: RequestID(response.Header), RetryAfter: RetryAfter(response.Header.Get("Retry-After")), Retryable: retryable,
 		Cause: readErr,
 	}
 }
 
-func statusKind(status int) (models.ErrorKind, bool) {
+// StatusKind maps an HTTP response status to the canonical model error kind
+// and retryability shared by all provider transports.
+func StatusKind(status int) (models.ErrorKind, bool) {
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return models.ErrorInvalidRequest, false
@@ -124,7 +122,9 @@ func rawCode(raw json.RawMessage) string {
 	return ""
 }
 
-func retryAfter(value string) time.Duration {
+// RetryAfter parses the standard Retry-After header as seconds or an HTTP
+// date. Past and invalid dates return zero.
+func RetryAfter(value string) time.Duration {
 	if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil && seconds >= 0 {
 		return time.Duration(seconds) * time.Second
 	}
@@ -136,11 +136,28 @@ func retryAfter(value string) time.Duration {
 	return 0
 }
 
+// Redact replaces configured secrets in a safely public error field.
+func Redact(value string, secrets []string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
+}
+
 // RequestID returns a safely public provider request identifier.
 func RequestID(header http.Header) string {
 	for _, name := range []string{"x-request-id", "request-id", "x-goog-request-id"} {
 		if value := header.Get(name); value != "" {
 			return value
+		}
+		// Custom Doers may construct response headers as map literals instead of
+		// canonicalizing them through net/http.
+		for key, values := range header {
+			if strings.EqualFold(key, name) && len(values) > 0 && values[0] != "" {
+				return values[0]
+			}
 		}
 	}
 	return ""

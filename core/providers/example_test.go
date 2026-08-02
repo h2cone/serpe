@@ -61,3 +61,31 @@ func ExampleProvider_stream() {
 	fmt.Printf(" (%s)\n", stream.Response().Candidates[0].FinishReason)
 	// Output: hello (stop)
 }
+
+func ExampleNew_officialSDK() {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"r1","model":"example-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from sdk"}]}]}`)
+	}))
+	defer server.Close()
+
+	provider, err := providers.New(providers.Config{
+		Protocol:   providers.OpenAIResponses,
+		Driver:     providers.DriverOfficialSDK,
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	model, err := provider.Model("example-model")
+	if err != nil {
+		panic(err)
+	}
+	response, err := model.Complete(context.Background(), models.NewTextRequest("say hello"))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(response.Text())
+	// Output: hello from sdk
+}

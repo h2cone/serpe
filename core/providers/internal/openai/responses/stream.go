@@ -50,6 +50,12 @@ func newResponseSource(reader *sse.Reader, requestID, fallbackModel string, igno
 	return &responseSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, ignoreUnknown: ignoreUnknown, stateLimit: stateLimit, parts: make(map[responsePartKey]*responsePartState)}
 }
 
+// NewSSEStreamSource builds a Responses event source from a raw SSE response
+// obtained through an official SDK request.
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, ignoreUnknown bool, stateLimit int64) models.EventSource {
+	return newResponseSource(reader, requestID, fallbackModel, ignoreUnknown, stateLimit)
+}
+
 func (s *responseSource) Next() (models.Event, error) {
 	for {
 		if event, ok := s.queue.Shift(); ok {
@@ -357,7 +363,11 @@ func (s *responseSource) accumulatedContent() ([]models.Content, error) {
 }
 
 func (s *responseSource) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.reader.Close() })
+	s.closeOnce.Do(func() {
+		if s.reader != nil {
+			s.closeErr = s.reader.Close()
+		}
+	})
 	return s.closeErr
 }
 
