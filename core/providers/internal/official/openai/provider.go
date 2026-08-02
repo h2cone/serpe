@@ -5,16 +5,14 @@ package openai
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 
 	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers/internal/httpx"
-	"github.com/h2cone/ouro/core/providers/internal/sdkhttp"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/sse"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
 )
 
 // Provider is an immutable official-SDK OpenAI provider bound to one protocol.
@@ -47,14 +45,7 @@ func NewResponses(config shared.Config) (*Provider, error) {
 }
 
 func requestOptions(config shared.Config) []option.RequestOption {
-	bridge := sdkhttp.NewBridge(sdkhttp.BridgeConfig{
-		Doer:               config.HTTPClient,
-		Authenticate:       config.Authenticate,
-		Headers:            config.Headers,
-		Provider:           "openai",
-		Limits:             config.Limits,
-		RequireContentType: !config.Policy.IgnoreContentType,
-	})
+	bridge := sdkhttp.NewConfigBridge(config, "openai")
 	endpoint := sdkhttp.OpenAIEndpoint(config.BaseURL)
 	opts := []option.RequestOption{
 		option.WithBaseURL(endpoint.BaseURL),
@@ -88,11 +79,8 @@ func (m *model) Capabilities() models.CapabilitySet {
 }
 
 func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
-	if ctx == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: "generate", Message: "context is nil"}
-	}
-	if req == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: "generate", Message: "request is nil"}
+	if err := sdkhttp.ValidateCall(ctx, req, "openai", "generate"); err != nil {
+		return nil, err
 	}
 	payload, err := m.encode(req, false)
 	if err != nil {
@@ -116,11 +104,8 @@ func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Resp
 }
 
 func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
-	if ctx == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: "stream", Message: "context is nil"}
-	}
-	if req == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: "stream", Message: "request is nil"}
+	if err := sdkhttp.ValidateCall(ctx, req, "openai", "stream"); err != nil {
+		return nil, err
 	}
 	payload, err := m.encode(req, true)
 	if err != nil {
@@ -171,45 +156,17 @@ func (m *model) encode(req *models.Request, stream bool) ([]byte, error) {
 }
 
 func normalizeError(err error, operation string, capture *sdkhttp.Capture, redact []string) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return models.ContextError("openai", operation, err)
-	}
-	var modelErr *models.Error
-	if errors.As(err, &modelErr) {
-		return modelErr
-	}
+	return sdkhttp.NormalizeError(err, "openai", operation, capture, redact, "official OpenAI SDK call failed", parseError)
+}
+
+func parseError(err error) (sdkhttp.ErrorInfo, bool) {
 	var apiErr *openai.Error
-	if errors.As(err, &apiErr) {
-		requestID := ""
-		if capture != nil {
-			requestID = capture.RequestID()
-		}
-		if requestID == "" && apiErr.Response != nil {
-			requestID = httpx.RequestID(apiErr.Response.Header)
-		}
-		message := apiErr.Message
-		code := apiErr.Code
-		if code == "" {
-			code = apiErr.Type
-		}
-		message = httpx.Redact(message, redact)
-		code = httpx.Redact(code, redact)
-		kind, retryable := httpx.StatusKind(apiErr.StatusCode)
-		var retryAfter time.Duration
-		if apiErr.Response != nil {
-			retryAfter = httpx.RetryAfter(apiErr.Response.Header.Get("Retry-After"))
-		}
-		return &models.Error{
-			Kind: kind, Provider: "openai", Operation: operation,
-			HTTPStatus: apiErr.StatusCode, Code: code, Message: message,
-			RequestID: requestID, RetryAfter: retryAfter, Retryable: retryable,
-		}
+	if !errors.As(err, &apiErr) {
+		return sdkhttp.ErrorInfo{}, false
 	}
-	return &models.Error{
-		Kind: models.ErrorUnavailable, Provider: "openai", Operation: operation,
-		Message: "official OpenAI SDK call failed", Retryable: true,
+	info := sdkhttp.ErrorInfo{Status: apiErr.StatusCode, Code: shared.FirstNonempty(apiErr.Code, apiErr.Type), Message: apiErr.Message}
+	if apiErr.Response != nil {
+		info.Header = apiErr.Response.Header
 	}
+	return info, true
 }

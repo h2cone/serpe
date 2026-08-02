@@ -3,7 +3,8 @@ package models
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -81,12 +82,7 @@ func (r *reducer) start(event Event) error {
 		RequestID:     event.Response.RequestID,
 		CreatedAt:     event.Response.CreatedAt,
 		ProviderState: event.Response.ProviderState.clone(),
-	}
-	if event.Response.Metadata != nil {
-		r.response.Metadata = make(map[string]string, len(event.Response.Metadata))
-		for key, value := range event.Response.Metadata {
-			r.response.Metadata[key] = value
-		}
+		Metadata:      maps.Clone(event.Response.Metadata),
 	}
 	r.started = true
 	return nil
@@ -272,10 +268,7 @@ func (r *reducer) end(event Event) error {
 			r.response.CreatedAt = event.Response.CreatedAt
 		}
 		if event.Response.Metadata != nil {
-			r.response.Metadata = make(map[string]string, len(event.Response.Metadata))
-			for key, value := range event.Response.Metadata {
-				r.response.Metadata[key] = value
-			}
+			r.response.Metadata = maps.Clone(event.Response.Metadata)
 		}
 		if event.Response.ProviderState != nil {
 			r.response.ProviderState = event.Response.ProviderState.clone()
@@ -297,11 +290,7 @@ func (r *reducer) end(event Event) error {
 	if event.Usage != nil {
 		r.response.Usage = event.Usage.clone()
 	}
-	indexes := make([]int, 0, len(r.candidates))
-	for index := range r.candidates {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
+	indexes := slices.Sorted(maps.Keys(r.candidates))
 	if len(indexes) == 0 {
 		r.response.Candidates = nil
 	} else {
@@ -309,11 +298,7 @@ func (r *reducer) end(event Event) error {
 	}
 	for _, index := range indexes {
 		acc := r.candidates[index]
-		partIndexes := make([]int, 0, len(acc.parts))
-		for partIndex := range acc.parts {
-			partIndexes = append(partIndexes, partIndex)
-		}
-		sort.Ints(partIndexes)
+		partIndexes := slices.Sorted(maps.Keys(acc.parts))
 		candidate := Candidate{Index: index, FinishReason: acc.finish, RawFinishReason: acc.rawFinish, ProviderState: acc.providerState.clone()}
 		if candidate.FinishReason == "" {
 			candidate.FinishReason = FinishUnknown

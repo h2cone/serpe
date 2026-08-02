@@ -8,16 +8,14 @@ import (
 	"iter"
 	"net/http"
 	"strconv"
-	"time"
 
 	"google.golang.org/genai"
 
 	"github.com/h2cone/ouro/core/models"
-	defaultgemini "github.com/h2cone/ouro/core/providers/internal/gemini/generatecontent"
-	"github.com/h2cone/ouro/core/providers/internal/httpx"
-	"github.com/h2cone/ouro/core/providers/internal/sdkhttp"
+	defaultgemini "github.com/h2cone/ouro/core/providers/internal/protocol/gemini"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/sse"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
 )
 
 // Placeholder API key used when Config has no APIKey (Authenticator-only or
@@ -34,15 +32,7 @@ type Provider struct {
 // New constructs an official Gemini provider without network access.
 func New(config shared.Config) (*Provider, error) {
 	endpoint := sdkhttp.GeminiEndpoint(config.BaseURL)
-	bridge := sdkhttp.NewBridge(sdkhttp.BridgeConfig{
-		Doer:               config.HTTPClient,
-		Authenticate:       config.Authenticate,
-		Headers:            config.Headers,
-		Provider:           "gemini",
-		Limits:             config.Limits,
-		RequireContentType: !config.Policy.IgnoreContentType,
-		PlaceholderAuth:    []string{placeholderAPIKey},
-	})
+	bridge := sdkhttp.NewConfigBridge(config, "gemini", placeholderAPIKey)
 	// Explicit Backend + APIKey + BaseURL/APIVersion so ambient env vars cannot
 	// select Vertex, inject credentials, or override the endpoint. The bridge
 	// still strips the SDK auth header and applies Config authentication.
@@ -82,11 +72,8 @@ func (m *model) Capabilities() models.CapabilitySet {
 }
 
 func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
-	if ctx == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "generate", Message: "context is nil"}
-	}
-	if req == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "generate", Message: "request is nil"}
+	if err := sdkhttp.ValidateCall(ctx, req, "gemini", "generate"); err != nil {
+		return nil, err
 	}
 	payload, err := m.encode(req)
 	if err != nil {
@@ -118,11 +105,8 @@ func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Resp
 }
 
 func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
-	if ctx == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "stream", Message: "context is nil"}
-	}
-	if req == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "stream", Message: "request is nil"}
+	if err := sdkhttp.ValidateCall(ctx, req, "gemini", "stream"); err != nil {
+		return nil, err
 	}
 	payload, err := m.encode(req)
 	if err != nil {
@@ -171,22 +155,13 @@ func (m *model) encode(req *models.Request) ([]byte, error) {
 }
 
 func normalizeError(err error, operation string, capture *sdkhttp.Capture, redact []string) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return models.ContextError("gemini", operation, err)
-	}
-	var modelErr *models.Error
-	if errors.As(err, &modelErr) {
-		return modelErr
-	}
+	secrets := append(append([]string(nil), redact...), placeholderAPIKey)
+	return sdkhttp.NormalizeError(err, "gemini", operation, capture, secrets, "official Gemini SDK call failed", parseError)
+}
+
+func parseError(err error) (sdkhttp.ErrorInfo, bool) {
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
-		requestID := ""
-		if capture != nil {
-			requestID = capture.RequestID()
-		}
 		message := apiErr.Message
 		if message == "" {
 			message = apiErr.Error()
@@ -195,29 +170,10 @@ func normalizeError(err error, operation string, capture *sdkhttp.Capture, redac
 		if code == "" {
 			code = strconv.Itoa(apiErr.Code)
 		}
-		secrets := append(append([]string(nil), redact...), placeholderAPIKey)
-		message = httpx.Redact(message, secrets)
-		code = httpx.Redact(code, secrets)
-		kind, retryable := httpx.StatusKind(apiErr.Code)
-		var retryAfter time.Duration
-		if capture != nil {
-			retryAfter = httpx.RetryAfter(capture.Header.Get("Retry-After"))
-		}
-		return &models.Error{
-			Kind: kind, Provider: "gemini", Operation: operation,
-			HTTPStatus: apiErr.Code, Code: code, Message: message,
-			RequestID: requestID, RetryAfter: retryAfter, Retryable: retryable,
-		}
+		return sdkhttp.ErrorInfo{Status: apiErr.Code, Code: code, Message: message, CaptureHeader: true}, true
 	}
-	// Transport / context wrapped by the SDK.
 	if errors.Is(err, io.EOF) {
-		return &models.Error{
-			Kind: models.ErrorProtocol, Provider: "gemini", Operation: operation,
-			Code: "unexpected_eof", Message: "official Gemini stream ended unexpectedly",
-		}
+		return sdkhttp.ErrorInfo{Kind: models.ErrorProtocol, Code: "unexpected_eof", Message: "official Gemini stream ended unexpectedly", OmitRequestID: true}, true
 	}
-	return &models.Error{
-		Kind: models.ErrorUnavailable, Provider: "gemini", Operation: operation,
-		Message: "official Gemini SDK call failed", Retryable: true,
-	}
+	return sdkhttp.ErrorInfo{}, false
 }

@@ -13,11 +13,10 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/h2cone/ouro/core/models"
-	defaultanthropic "github.com/h2cone/ouro/core/providers/internal/anthropic"
-	"github.com/h2cone/ouro/core/providers/internal/httpx"
-	"github.com/h2cone/ouro/core/providers/internal/sdkhttp"
+	defaultanthropic "github.com/h2cone/ouro/core/providers/internal/protocol/anthropic"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/sse"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
 )
 
 // Provider is an immutable official-SDK Anthropic Messages provider.
@@ -28,14 +27,7 @@ type Provider struct {
 
 // New constructs an official Anthropic provider without network access.
 func New(config shared.Config) (*Provider, error) {
-	bridge := sdkhttp.NewBridge(sdkhttp.BridgeConfig{
-		Doer:               config.HTTPClient,
-		Authenticate:       config.Authenticate,
-		Headers:            config.Headers,
-		Provider:           "anthropic",
-		Limits:             config.Limits,
-		RequireContentType: !config.Policy.IgnoreContentType,
-	})
+	bridge := sdkhttp.NewConfigBridge(config, "anthropic")
 	endpoint := sdkhttp.AnthropicEndpoint(config.BaseURL)
 	opts := []option.RequestOption{
 		option.WithoutEnvironmentDefaults(),
@@ -73,11 +65,8 @@ func (m *model) Capabilities() models.CapabilitySet {
 }
 
 func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
-	if ctx == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: "generate", Message: "context is nil"}
-	}
-	if req == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: "generate", Message: "request is nil"}
+	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "generate"); err != nil {
+		return nil, err
 	}
 	payload, err := m.encode(req, false)
 	if err != nil {
@@ -91,20 +80,16 @@ func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Resp
 	if req.RequestID != "" {
 		callOpts = append(callOpts, option.WithHeader("X-Request-ID", req.RequestID))
 	}
-	message, callErr := m.provider.client.Messages.New(ctx, params, callOpts...)
+	raw, callErr := sdkhttp.RawJSON(m.provider.client.Messages.New(ctx, params, callOpts...))
 	if callErr != nil {
 		return nil, normalizeError(callErr, "generate", capture, m.provider.config.Redact)
 	}
-	requestID := capture.RequestID()
-	return defaultanthropic.DecodeResponseJSON([]byte(message.RawJSON()), requestID, m.provider.config.Limits.MaxProviderStateBytes)
+	return defaultanthropic.DecodeResponseJSON(raw, capture.RequestID(), m.provider.config.Limits.MaxProviderStateBytes)
 }
 
 func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
-	if ctx == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: "stream", Message: "context is nil"}
-	}
-	if req == nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: "stream", Message: "request is nil"}
+	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "stream"); err != nil {
+		return nil, err
 	}
 	payload, err := m.encode(req, true)
 	if err != nil {
@@ -149,49 +134,22 @@ func (m *model) encode(req *models.Request, stream bool) ([]byte, error) {
 }
 
 func normalizeError(err error, operation string, capture *sdkhttp.Capture, redact []string) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return models.ContextError("anthropic", operation, err)
-	}
-	var modelErr *models.Error
-	if errors.As(err, &modelErr) {
-		return modelErr
-	}
+	return sdkhttp.NormalizeError(err, "anthropic", operation, capture, redact, "official Anthropic SDK call failed", parseError)
+}
+
+func parseError(err error) (sdkhttp.ErrorInfo, bool) {
 	var apiErr *anthropic.Error
-	if errors.As(err, &apiErr) {
-		requestID := apiErr.RequestID
-		if requestID == "" && capture != nil {
-			requestID = capture.RequestID()
-		}
-		if requestID == "" && apiErr.Response != nil {
-			requestID = httpx.RequestID(apiErr.Response.Header)
-		}
-		message, code := parseAnthropicErrorBody(apiErr.RawJSON())
-		if message == "" {
-			message = http.StatusText(apiErr.StatusCode)
-		}
-		if code == "" {
-			code = string(apiErr.Type())
-		}
-		message = httpx.Redact(message, redact)
-		code = httpx.Redact(code, redact)
-		kind, retryable := httpx.StatusKind(apiErr.StatusCode)
-		var retryAfter time.Duration
-		if apiErr.Response != nil {
-			retryAfter = httpx.RetryAfter(apiErr.Response.Header.Get("Retry-After"))
-		}
-		return &models.Error{
-			Kind: kind, Provider: "anthropic", Operation: operation,
-			HTTPStatus: apiErr.StatusCode, Code: code, Message: message,
-			RequestID: requestID, RetryAfter: retryAfter, Retryable: retryable,
-		}
+	if !errors.As(err, &apiErr) {
+		return sdkhttp.ErrorInfo{}, false
 	}
-	return &models.Error{
-		Kind: models.ErrorUnavailable, Provider: "anthropic", Operation: operation,
-		Message: "official Anthropic SDK call failed", Retryable: true,
+	message, code := parseAnthropicErrorBody(apiErr.RawJSON())
+	message = shared.FirstNonempty(message, http.StatusText(apiErr.StatusCode))
+	code = shared.FirstNonempty(code, string(apiErr.Type()))
+	info := sdkhttp.ErrorInfo{Status: apiErr.StatusCode, Code: code, Message: message, RequestID: apiErr.RequestID}
+	if apiErr.Response != nil {
+		info.Header = apiErr.Response.Header
 	}
+	return info, true
 }
 
 func parseAnthropicErrorBody(raw string) (message, code string) {
@@ -209,13 +167,5 @@ func parseAnthropicErrorBody(raw string) (message, code string) {
 	if json.Unmarshal([]byte(raw), &envelope) != nil {
 		return "", ""
 	}
-	message = envelope.Error.Message
-	if message == "" {
-		message = envelope.Message
-	}
-	code = envelope.Error.Type
-	if code == "" {
-		code = envelope.Type
-	}
-	return message, code
+	return shared.FirstNonempty(envelope.Error.Message, envelope.Message), shared.FirstNonempty(envelope.Error.Type, envelope.Type)
 }

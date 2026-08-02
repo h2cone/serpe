@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"maps"
+	"time"
+)
 
 // EventKind is a normalized streaming lifecycle event kind.
 type EventKind string
@@ -77,12 +80,7 @@ func (e Event) clone() Event {
 	if e.Response != nil {
 		info := *e.Response
 		info.ProviderState = e.Response.ProviderState.clone()
-		if e.Response.Metadata != nil {
-			info.Metadata = make(map[string]string, len(e.Response.Metadata))
-			for key, value := range e.Response.Metadata {
-				info.Metadata[key] = value
-			}
-		}
+		info.Metadata = maps.Clone(e.Response.Metadata)
 		out.Response = &info
 	}
 	if e.Finishes != nil {

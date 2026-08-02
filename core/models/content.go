@@ -127,13 +127,7 @@ func Refusal(text string) Content {
 
 // Validate checks that exactly one union member is active and validates it.
 func (c Content) Validate() error {
-	active := 0
-	for _, set := range []bool{c.Text != nil, c.Image != nil, c.ToolCall != nil, c.ToolResult != nil, c.ReasoningSummary != nil, c.Refusal != nil} {
-		if set {
-			active++
-		}
-	}
-	if active != 1 {
+	if unionCount(c) != 1 {
 		return fmt.Errorf("content: exactly one variant must be set")
 	}
 	switch c.Kind {

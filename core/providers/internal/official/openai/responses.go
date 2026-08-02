@@ -8,9 +8,10 @@ import (
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 
 	"github.com/h2cone/ouro/core/models"
-	defaultresponses "github.com/h2cone/ouro/core/providers/internal/openai/responses"
+	defaultresponses "github.com/h2cone/ouro/core/providers/internal/protocol/openai/responses"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/sse"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
 )
 
 type responsesAdapter struct {
@@ -32,22 +33,13 @@ func (*responsesAdapter) encode(modelID string, request *models.Request, stream 
 func (a *responsesAdapter) complete(ctx context.Context, payload []byte, options []option.RequestOption) ([]byte, error) {
 	var params sdkresponses.ResponseNewParams
 	param.SetJSON(payload, &params)
-	response, err := a.service.New(ctx, params, options...)
-	if err != nil {
-		return nil, err
-	}
-	return []byte(response.RawJSON()), nil
+	return sdkhttp.RawJSON(a.service.New(ctx, params, options...))
 }
 
 func (a *responsesAdapter) startStream(ctx context.Context, payload []byte, options []option.RequestOption) (func() error, error) {
 	var params sdkresponses.ResponseNewParams
 	param.SetJSON(payload, &params)
-	stream := a.service.NewStreaming(ctx, params, options...)
-	if err := stream.Err(); err != nil {
-		_ = stream.Close()
-		return nil, err
-	}
-	return stream.Close, nil
+	return sdkhttp.StartStream(a.service.NewStreaming(ctx, params, options...))
 }
 
 func (*responsesAdapter) decode(raw []byte, requestID string, config shared.Config) (*models.Response, error) {

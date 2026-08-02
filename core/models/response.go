@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -143,12 +144,7 @@ func (r *Response) Clone() *Response {
 			out.Candidates[i].ProviderState = r.Candidates[i].ProviderState.clone()
 		}
 	}
-	if r.Metadata != nil {
-		out.Metadata = make(map[string]string, len(r.Metadata))
-		for k, v := range r.Metadata {
-			out.Metadata[k] = v
-		}
-	}
+	out.Metadata = maps.Clone(r.Metadata)
 	sort.Slice(out.Candidates, func(i, j int) bool { return out.Candidates[i].Index < out.Candidates[j].Index })
 	return &out
 }

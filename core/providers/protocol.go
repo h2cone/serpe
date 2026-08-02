@@ -14,28 +14,12 @@ const (
 	GeminiGenerateContent Protocol = "gemini.generate_content"
 )
 
-func (p Protocol) providerName() string {
-	switch p {
-	case OpenAIChatCompletions, OpenAIResponses:
-		return "openai"
-	case AnthropicMessages:
-		return "anthropic"
-	case GeminiGenerateContent:
-		return "gemini"
-	default:
-		return ""
-	}
+var protocolDetails = map[Protocol]struct{ provider, baseURL string }{
+	OpenAIChatCompletions: {"openai", "https://api.openai.com"},
+	OpenAIResponses:       {"openai", "https://api.openai.com"},
+	AnthropicMessages:     {"anthropic", "https://api.anthropic.com"},
+	GeminiGenerateContent: {"gemini", "https://generativelanguage.googleapis.com"},
 }
 
-func (p Protocol) defaultBaseURL() string {
-	switch p {
-	case OpenAIChatCompletions, OpenAIResponses:
-		return "https://api.openai.com"
-	case AnthropicMessages:
-		return "https://api.anthropic.com"
-	case GeminiGenerateContent:
-		return "https://generativelanguage.googleapis.com"
-	default:
-		return ""
-	}
-}
+func (p Protocol) providerName() string   { return protocolDetails[p].provider }
+func (p Protocol) defaultBaseURL() string { return protocolDetails[p].baseURL }
