@@ -18,7 +18,7 @@ var protocolDetails = map[Protocol]struct{ provider, baseURL string }{
 	OpenAIChatCompletions: {"openai", "https://api.openai.com"},
 	OpenAIResponses:       {"openai", "https://api.openai.com"},
 	AnthropicMessages:     {"anthropic", "https://api.anthropic.com"},
-	GeminiGenerateContent: {"gemini", "https://generativelanguage.googleapis.com"},
+	GeminiGenerateContent: {"google", "https://generativelanguage.googleapis.com"},
 }
 
 func (p Protocol) providerName() string   { return protocolDetails[p].provider }

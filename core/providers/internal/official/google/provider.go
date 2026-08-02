@@ -1,5 +1,5 @@
-// Package gemini implements the official Google Gen AI SDK GenerateContent adapter.
-package gemini
+// Package google implements the official Google Gen AI SDK GenerateContent adapter.
+package google
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/h2cone/ouro/core/models"
-	defaultgemini "github.com/h2cone/ouro/core/providers/internal/protocol/gemini"
+	defaultgoogle "github.com/h2cone/ouro/core/providers/internal/protocol/google"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
 	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
 	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
@@ -32,7 +32,7 @@ type Provider struct {
 // New constructs an official Gemini provider without network access.
 func New(config shared.Config) (*Provider, error) {
 	endpoint := sdkhttp.GeminiEndpoint(config.BaseURL)
-	bridge := sdkhttp.NewConfigBridge(config, "gemini", placeholderAPIKey)
+	bridge := sdkhttp.NewConfigBridge(config, "google", placeholderAPIKey)
 	// Explicit Backend + APIKey + BaseURL/APIVersion so ambient env vars cannot
 	// select Vertex, inject credentials, or override the endpoint. The bridge
 	// still strips the SDK auth header and applies Config authentication.
@@ -47,7 +47,7 @@ func New(config shared.Config) (*Provider, error) {
 	})
 	if err != nil {
 		return nil, &models.Error{
-			Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "construct",
+			Kind: models.ErrorInvalidRequest, Provider: "google", Operation: "construct",
 			Message: "failed to construct official Gemini client: " + err.Error(),
 		}
 	}
@@ -56,7 +56,7 @@ func New(config shared.Config) (*Provider, error) {
 
 // Model validates and binds a physical model identifier.
 func (p *Provider) Model(modelID string) (models.Model, error) {
-	if _, err := defaultgemini.ValidateModelID(modelID); err != nil {
+	if _, err := defaultgoogle.ValidateModelID(modelID); err != nil {
 		return nil, err
 	}
 	return &model{provider: p, modelID: modelID}, nil
@@ -68,11 +68,11 @@ type model struct {
 }
 
 func (m *model) Capabilities() models.CapabilitySet {
-	return defaultgemini.ProtocolCapabilities()
+	return defaultgoogle.ProtocolCapabilities()
 }
 
 func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
-	if err := sdkhttp.ValidateCall(ctx, req, "gemini", "generate"); err != nil {
+	if err := sdkhttp.ValidateCall(ctx, req, "google", "generate"); err != nil {
 		return nil, err
 	}
 	payload, err := m.encode(req)
@@ -97,15 +97,15 @@ func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Resp
 	raw := capture.Body
 	if len(raw) == 0 {
 		return nil, &models.Error{
-			Kind: models.ErrorProtocol, Provider: "gemini", Operation: "generate",
+			Kind: models.ErrorProtocol, Provider: "google", Operation: "generate",
 			Code: "missing_response_body", Message: "official Gemini SDK returned no response body",
 		}
 	}
-	return defaultgemini.DecodeResponseJSON(raw, requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes)
+	return defaultgoogle.DecodeResponseJSON(raw, requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes)
 }
 
 func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
-	if err := sdkhttp.ValidateCall(ctx, req, "gemini", "stream"); err != nil {
+	if err := sdkhttp.ValidateCall(ctx, req, "google", "stream"); err != nil {
 		return nil, err
 	}
 	payload, err := m.encode(req)
@@ -135,28 +135,28 @@ func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream,
 			return nil, normalizeError(setupErr, "stream", capture, m.provider.config.Redact)
 		}
 		return nil, &models.Error{
-			Kind: models.ErrorProtocol, Provider: "gemini", Operation: "stream",
+			Kind: models.ErrorProtocol, Provider: "google", Operation: "stream",
 			Code: "missing_response", Message: "official Gemini SDK returned no streaming response body",
 		}
 	}
-	source := defaultgemini.NewSSEStreamSource(
+	source := defaultgoogle.NewSSEStreamSource(
 		sse.NewReaderWithClose(body, m.provider.config.Limits.MaxSSEEventBytes, func() error {
 			cancel()
 			return nil
 		}), requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes)
-	return models.NewStream(ctx, source, models.WithStreamProvider("gemini")), nil
+	return models.NewStream(ctx, source, models.WithStreamProvider("google")), nil
 }
 
 func (m *model) encode(req *models.Request) ([]byte, error) {
-	if err := models.ValidateCapabilities(req, m.Capabilities(), "gemini"); err != nil {
+	if err := models.ValidateCapabilities(req, m.Capabilities(), "google"); err != nil {
 		return nil, err
 	}
-	return defaultgemini.EncodeRequest(req, m.provider.config.Policy.LenientMapping, m.provider.config.Limits.MaxProviderStateBytes)
+	return defaultgoogle.EncodeRequest(req, m.provider.config.Policy.LenientMapping, m.provider.config.Limits.MaxProviderStateBytes)
 }
 
 func normalizeError(err error, operation string, capture *sdkhttp.Capture, redact []string) error {
 	secrets := append(append([]string(nil), redact...), placeholderAPIKey)
-	return sdkhttp.NormalizeError(err, "gemini", operation, capture, secrets, "official Gemini SDK call failed", parseError)
+	return sdkhttp.NormalizeError(err, "google", operation, capture, secrets, "official Gemini SDK call failed", parseError)
 }
 
 func parseError(err error) (sdkhttp.ErrorInfo, bool) {

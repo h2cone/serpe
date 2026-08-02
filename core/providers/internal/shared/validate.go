@@ -50,7 +50,7 @@ func providerFromProtocol(protocol string) string {
 		return "anthropic"
 	}
 	if strings.HasPrefix(protocol, "gemini.") {
-		return "gemini"
+		return "google"
 	}
 	return ""
 }

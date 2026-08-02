@@ -1,4 +1,4 @@
-package gemini
+package google
 
 import (
 	"encoding/base64"
@@ -81,7 +81,7 @@ func EncodeRequest(req *models.Request, lenient bool, stateLimit int64) ([]byte,
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
-		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "encode", Message: "failed to encode Gemini request", Cause: err}
+		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "google", Operation: "encode", Message: "failed to encode Gemini request", Cause: err}
 	}
 	return shared.MergeExtension(encoded, req.Extensions, protocol,
 		"systemInstruction", "contents", "tools", "toolConfig", "generationConfig")
@@ -159,15 +159,15 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) (cont
 		}
 	}
 	if len(result.Parts) == 0 {
-		return contentWire{}, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "encode", Message: "Gemini content became empty after mapping"}
+		return contentWire{}, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "google", Operation: "encode", Message: "Gemini content became empty after mapping"}
 	}
 	return result, nil
 }
 
 func unsupported(message string) error {
-	return &models.Error{Kind: models.ErrorUnsupportedFeature, Provider: "gemini", Operation: "encode", Message: message}
+	return &models.Error{Kind: models.ErrorUnsupportedFeature, Provider: "google", Operation: "encode", Message: message}
 }
 
 func invalidState(message string, cause error) error {
-	return &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "encode", Code: "invalid_provider_state", Message: message, Cause: cause}
+	return &models.Error{Kind: models.ErrorInvalidRequest, Provider: "google", Operation: "encode", Code: "invalid_provider_state", Message: message, Cause: cause}
 }

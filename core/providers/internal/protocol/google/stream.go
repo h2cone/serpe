@@ -1,4 +1,4 @@
-package gemini
+package google
 
 import (
 	"encoding/json"
@@ -13,13 +13,13 @@ import (
 	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
 )
 
-type geminiSource struct {
+type googleSource struct {
 	reader             *sse.Reader
 	requestID          string
 	fallbackModel      string
 	stateLimit         int64
 	queue              shared.EventQueue
-	candidates         map[int]*geminiCandidateState
+	candidates         map[int]*googleCandidateState
 	started            bool
 	finished           bool
 	responseID         string
@@ -29,8 +29,8 @@ type geminiSource struct {
 	promptBlockMessage string
 }
 
-type geminiCandidateState struct {
-	parts      map[int]*geminiPartState
+type googleCandidateState struct {
+	parts      map[int]*googlePartState
 	nextPart   int
 	activePart int
 	lastPart   int
@@ -39,7 +39,7 @@ type geminiCandidateState struct {
 	role       string
 }
 
-type geminiPartState struct {
+type googlePartState struct {
 	kind models.ContentKind
 	open bool
 	wire partWire
@@ -49,10 +49,10 @@ type geminiPartState struct {
 // NewSSEStreamSource builds a Gemini event source from a raw SSE response
 // obtained through an official SDK request.
 func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, stateLimit int64) models.EventSource {
-	return &geminiSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, stateLimit: stateLimit, candidates: make(map[int]*geminiCandidateState)}
+	return &googleSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, stateLimit: stateLimit, candidates: make(map[int]*googleCandidateState)}
 }
 
-func (s *geminiSource) Next() (models.Event, error) {
+func (s *googleSource) Next() (models.Event, error) {
 	for {
 		if event, ok := s.queue.Shift(); ok {
 			return event, nil
@@ -92,7 +92,7 @@ func (s *geminiSource) Next() (models.Event, error) {
 	}
 }
 
-func (s *geminiSource) consume(response responseWire, eventID string) error {
+func (s *googleSource) consume(response responseWire, eventID string) error {
 	if response.ResponseID != "" {
 		s.responseID = response.ResponseID
 	}
@@ -104,7 +104,7 @@ func (s *geminiSource) consume(response responseWire, eventID string) error {
 		if modelName == "" {
 			modelName = s.fallbackModel
 		}
-		s.queue.Push(models.Event{Kind: models.EventResponseStart, Response: &models.ResponseInfo{Provider: "gemini", ID: s.responseID, Model: modelName, RequestID: s.requestID}, ProviderEventID: eventID})
+		s.queue.Push(models.Event{Kind: models.EventResponseStart, Response: &models.ResponseInfo{Provider: "google", ID: s.responseID, Model: modelName, RequestID: s.requestID}, ProviderEventID: eventID})
 		s.started = true
 	}
 	for position, wireCandidate := range response.Candidates {
@@ -140,16 +140,16 @@ func (s *geminiSource) consume(response responseWire, eventID string) error {
 	return nil
 }
 
-func (s *geminiSource) candidate(index int) *geminiCandidateState {
+func (s *googleSource) candidate(index int) *googleCandidateState {
 	state := s.candidates[index]
 	if state == nil {
-		state = &geminiCandidateState{parts: make(map[int]*geminiPartState), activePart: -1, lastPart: -1, finish: models.FinishUnknown, role: "model"}
+		state = &googleCandidateState{parts: make(map[int]*googlePartState), activePart: -1, lastPart: -1, finish: models.FinishUnknown, role: "model"}
 		s.candidates[index] = state
 	}
 	return state
 }
 
-func (s *geminiSource) consumePart(candidateIndex int, part partWire, mayContinue bool, eventID string) error {
+func (s *googleSource) consumePart(candidateIndex int, part partWire, mayContinue bool, eventID string) error {
 	candidate := s.candidate(candidateIndex)
 	switch {
 	case part.Text != nil:
@@ -167,7 +167,7 @@ func (s *geminiSource) consumePart(candidateIndex int, part partWire, mayContinu
 			s.closeActivePart(candidateIndex, eventID)
 			partIndex = candidate.nextPart
 			candidate.nextPart++
-			state = &geminiPartState{kind: kind, open: true, wire: part}
+			state = &googlePartState{kind: kind, open: true, wire: part}
 			candidate.parts[partIndex] = state
 			candidate.activePart = partIndex
 			candidate.lastPart = partIndex
@@ -189,7 +189,7 @@ func (s *geminiSource) consumePart(candidateIndex int, part partWire, mayContinu
 		s.closeActivePart(candidateIndex, eventID)
 		partIndex := candidate.nextPart
 		candidate.nextPart++
-		state := &geminiPartState{kind: models.ContentToolCall, open: false, wire: part}
+		state := &googlePartState{kind: models.ContentToolCall, open: false, wire: part}
 		candidate.parts[partIndex] = state
 		candidate.lastPart = partIndex
 		s.queue.Push(
@@ -208,7 +208,7 @@ func (s *geminiSource) consumePart(candidateIndex int, part partWire, mayContinu
 			} else {
 				partIndex = candidate.nextPart
 				candidate.nextPart++
-				candidate.parts[partIndex] = &geminiPartState{wire: part}
+				candidate.parts[partIndex] = &googlePartState{wire: part}
 				candidate.lastPart = partIndex
 			}
 		}
@@ -216,7 +216,7 @@ func (s *geminiSource) consumePart(candidateIndex int, part partWire, mayContinu
 	return nil
 }
 
-func (s *geminiSource) closeActivePart(candidateIndex int, eventID string) {
+func (s *googleSource) closeActivePart(candidateIndex int, eventID string) {
 	candidate := s.candidate(candidateIndex)
 	partIndex := candidate.activePart
 	if partIndex < 0 {
@@ -229,7 +229,7 @@ func (s *geminiSource) closeActivePart(candidateIndex int, eventID string) {
 	candidate.activePart = -1
 }
 
-func candidateHasTool(candidate *geminiCandidateState) bool {
+func candidateHasTool(candidate *googleCandidateState) bool {
 	for _, part := range candidate.parts {
 		if part.kind == models.ContentToolCall {
 			return true
@@ -238,7 +238,7 @@ func candidateHasTool(candidate *geminiCandidateState) bool {
 	return false
 }
 
-func (s *geminiSource) hasTerminalEvidence() bool {
+func (s *googleSource) hasTerminalEvidence() bool {
 	if !s.started {
 		return false
 	}
@@ -260,7 +260,7 @@ func (s *geminiSource) hasTerminalEvidence() bool {
 	return true
 }
 
-func (s *geminiSource) complete() error {
+func (s *googleSource) complete() error {
 	indexes := slices.Sorted(maps.Keys(s.candidates))
 	finishes := make([]models.CandidateFinish, 0, len(indexes))
 	status := models.ResponseStatusCompleted
@@ -306,11 +306,11 @@ func (s *geminiSource) complete() error {
 	if modelName == "" {
 		modelName = s.fallbackModel
 	}
-	s.queue.Push(models.Event{Kind: models.EventResponseEnd, Response: &models.ResponseInfo{Provider: "gemini", ID: s.responseID, Model: modelName, Status: status, RequestID: s.requestID, Metadata: metadata}, Finishes: finishes, Usage: s.usage})
+	s.queue.Push(models.Event{Kind: models.EventResponseEnd, Response: &models.ResponseInfo{Provider: "google", ID: s.responseID, Model: modelName, Status: status, RequestID: s.requestID, Metadata: metadata}, Finishes: finishes, Usage: s.usage})
 	return nil
 }
 
-func (s *geminiSource) Close() error {
+func (s *googleSource) Close() error {
 	if s.reader == nil {
 		return nil
 	}
@@ -318,5 +318,5 @@ func (s *geminiSource) Close() error {
 }
 
 func streamProtocol(code, message string, cause error) error {
-	return &models.Error{Kind: models.ErrorProtocol, Provider: "gemini", Operation: "stream_next", Code: code, Message: message, Cause: cause}
+	return &models.Error{Kind: models.ErrorProtocol, Provider: "google", Operation: "stream_next", Code: code, Message: message, Cause: cause}
 }

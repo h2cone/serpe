@@ -1,5 +1,5 @@
-// Package gemini implements the Google Gemini GenerateContent protocol.
-package gemini
+// Package google implements the Google Gemini GenerateContent protocol.
+package google
 
 import (
 	"net/url"
@@ -30,7 +30,7 @@ type Provider = httpx.Provider
 // New constructs a Gemini provider without network access.
 func New(config shared.Config) *Provider {
 	return httpx.NewProvider(config, httpx.Adapter{
-		Provider: "gemini", Capabilities: capabilities, BindModel: ValidateModelID,
+		Provider: "google", Capabilities: capabilities, BindModel: ValidateModelID,
 		Route: func(modelID string, stream bool) (string, url.Values) {
 			if stream {
 				return "/v1beta/models/" + modelID + ":streamGenerateContent", url.Values{"alt": {"sse"}}
@@ -40,7 +40,7 @@ func New(config shared.Config) *Provider {
 		Encode: func(_ string, req *models.Request, _ bool, config shared.Config) ([]byte, error) {
 			return EncodeRequest(req, config.Policy.LenientMapping, config.Limits.MaxProviderStateBytes)
 		},
-		Decode: httpx.JSONDecoder("gemini", func(wire responseWire, requestID, modelID string, config shared.Config) (*models.Response, error) {
+		Decode: httpx.JSONDecoder("google", func(wire responseWire, requestID, modelID string, config shared.Config) (*models.Response, error) {
 			return decodeResponse(wire, requestID, modelID, config.Limits.MaxProviderStateBytes)
 		}),
 		NewSource: func(reader *sse.Reader, requestID, modelID string, config shared.Config) models.EventSource {

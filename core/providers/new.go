@@ -5,7 +5,7 @@ import (
 
 	"github.com/h2cone/ouro/core/providers/internal/official"
 	"github.com/h2cone/ouro/core/providers/internal/protocol/anthropic"
-	"github.com/h2cone/ouro/core/providers/internal/protocol/gemini"
+	"github.com/h2cone/ouro/core/providers/internal/protocol/google"
 	"github.com/h2cone/ouro/core/providers/internal/protocol/openai/chatcompletions"
 	"github.com/h2cone/ouro/core/providers/internal/protocol/openai/responses"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
@@ -43,7 +43,7 @@ func newDefaultProvider(protocol Protocol, internal shared.Config) (Provider, er
 	case AnthropicMessages:
 		return anthropic.New(internal), nil
 	case GeminiGenerateContent:
-		return gemini.New(internal), nil
+		return google.New(internal), nil
 	default:
 		return nil, fmt.Errorf("providers: unknown protocol %q", protocol)
 	}

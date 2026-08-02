@@ -1,4 +1,4 @@
-package gemini
+package google
 
 import (
 	"encoding/json"
@@ -24,13 +24,13 @@ func DecodeResponseJSON(data []byte, requestID, fallbackModel string, stateLimit
 
 // ValidateModelID enforces Gemini bare model ID rules and returns a path-escaped ID.
 func ValidateModelID(modelID string) (escaped string, err error) {
-	if err := shared.ValidateModelID(modelID, "gemini"); err != nil {
+	if err := shared.ValidateModelID(modelID, "google"); err != nil {
 		return "", err
 	}
 	if modelID == "." || modelID == ".." || strings.ContainsAny(modelID, "/\\?#:%") || strings.IndexFunc(modelID, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r) || !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.')
 	}) >= 0 {
-		return "", &models.Error{Kind: models.ErrorInvalidRequest, Provider: "gemini", Operation: "bind_model", Code: "invalid_model", Message: "Gemini model ID must be a safe bare model name"}
+		return "", &models.Error{Kind: models.ErrorInvalidRequest, Provider: "google", Operation: "bind_model", Code: "invalid_model", Message: "Gemini model ID must be a safe bare model name"}
 	}
 	return url.PathEscape(modelID), nil
 }

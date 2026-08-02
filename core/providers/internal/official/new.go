@@ -6,7 +6,7 @@ import (
 
 	"github.com/h2cone/ouro/core/models"
 	"github.com/h2cone/ouro/core/providers/internal/official/anthropic"
-	"github.com/h2cone/ouro/core/providers/internal/official/gemini"
+	"github.com/h2cone/ouro/core/providers/internal/official/google"
 	"github.com/h2cone/ouro/core/providers/internal/official/openai"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
 )
@@ -40,7 +40,7 @@ func New(protocol Protocol, config shared.Config) (Provider, error) {
 	case AnthropicMessages:
 		return anthropic.New(config)
 	case GeminiGenerateContent:
-		return gemini.New(config)
+		return google.New(config)
 	default:
 		return nil, fmt.Errorf("providers: official SDK does not support protocol %q", protocol)
 	}

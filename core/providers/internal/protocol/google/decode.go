@@ -1,4 +1,4 @@
-package gemini
+package google
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLim
 	if modelName == "" {
 		modelName = fallbackModel
 	}
-	response := &models.Response{Provider: "gemini", ID: wire.ResponseID, Model: modelName, Status: models.ResponseStatusCompleted, RequestID: requestID}
+	response := &models.Response{Provider: "google", ID: wire.ResponseID, Model: modelName, Status: models.ResponseStatusCompleted, RequestID: requestID}
 	for position, wireCandidate := range wire.Candidates {
 		index := position
 		if wireCandidate.Index != nil {
@@ -52,7 +52,7 @@ func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLim
 		if hasState {
 			stateData, _ := json.Marshal(wireCandidate.Content)
 			if int64(len(stateData)) > stateLimit {
-				return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "gemini", Operation: "generate", Code: "provider_state_too_large", Message: "Gemini provider state exceeds configured limit"}
+				return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "google", Operation: "generate", Code: "provider_state_too_large", Message: "Gemini provider state exceeds configured limit"}
 			}
 			candidate.ProviderState = &models.ProviderState{Provider: protocol, Data: stateData}
 		}
@@ -108,7 +108,7 @@ func mapFinish(raw string) models.FinishReason {
 }
 
 func protocolError(message string, cause error) error {
-	return &models.Error{Kind: models.ErrorProtocol, Provider: "gemini", Operation: "generate", Code: "invalid_response", Message: message, Cause: cause}
+	return &models.Error{Kind: models.ErrorProtocol, Provider: "google", Operation: "generate", Code: "invalid_response", Message: message, Cause: cause}
 }
 
 func errorCode(code int) string {
@@ -139,5 +139,5 @@ func normalizeWireError(wire *errorWire, operation, requestID string) *models.Er
 	case 500, 502, 503:
 		kind, retryable = models.ErrorUnavailable, true
 	}
-	return &models.Error{Kind: kind, Provider: "gemini", Operation: operation, HTTPStatus: wire.Code, Code: shared.FirstNonempty(wire.Status, errorCode(wire.Code)), Message: wire.Message, RequestID: requestID, Retryable: retryable}
+	return &models.Error{Kind: kind, Provider: "google", Operation: operation, HTTPStatus: wire.Code, Code: shared.FirstNonempty(wire.Status, errorCode(wire.Code)), Message: wire.Message, RequestID: requestID, Retryable: retryable}
 }
