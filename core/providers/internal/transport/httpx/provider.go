@@ -45,29 +45,29 @@ func NewProvider(config shared.Config, adapter Adapter) *Provider {
 	})}
 }
 
-// Model validates and binds a physical model identifier.
-func (p *Provider) Model(modelID string) (models.Model, error) {
-	routeID, err := modelID, error(nil)
+// Model validates and binds an upstream model identifier.
+func (p *Provider) Model(upstreamModelID string) (models.Model, error) {
+	routeID, err := upstreamModelID, error(nil)
 	if p.adapter.BindModel != nil {
-		routeID, err = p.adapter.BindModel(modelID)
+		routeID, err = p.adapter.BindModel(upstreamModelID)
 	} else {
-		err = shared.ValidateModelID(modelID, p.adapter.Provider)
+		err = shared.ValidateModelID(upstreamModelID, p.adapter.Provider)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &model{provider: p, modelID: modelID, routeID: routeID}, nil
+	return &upstreamModel{provider: p, modelID: upstreamModelID, routeID: routeID}, nil
 }
 
-type model struct {
+type upstreamModel struct {
 	provider *Provider
 	modelID  string
 	routeID  string
 }
 
-func (m *model) Capabilities() models.CapabilitySet { return m.provider.adapter.Capabilities }
+func (m *upstreamModel) Capabilities() models.CapabilitySet { return m.provider.adapter.Capabilities }
 
-func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
+func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	response, err := m.send(ctx, req, false)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Resp
 	return m.provider.adapter.Decode(response, m.modelID, m.provider.config)
 }
 
-func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
 	response, err := m.send(ctx, req, true)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream,
 	return models.NewStream(ctx, source, models.WithStreamProvider(m.provider.adapter.Provider)), nil
 }
 
-func (m *model) send(ctx context.Context, req *models.Request, stream bool) (*http.Response, error) {
+func (m *upstreamModel) send(ctx context.Context, req *models.Request, stream bool) (*http.Response, error) {
 	adapter, config := m.provider.adapter, m.provider.config
 	if err := models.ValidateCapabilities(req, adapter.Capabilities, adapter.Provider); err != nil {
 		return nil, err

@@ -9,12 +9,12 @@ import (
 	"github.com/h2cone/ouro/core/models"
 )
 
-// ValidateModelID checks generic physical model ID invariants.
-func ValidateModelID(modelID, provider string) error {
-	if modelID == "" || strings.TrimSpace(modelID) != modelID {
+// ValidateModelID checks generic upstream model ID invariants.
+func ValidateModelID(upstreamModelID, provider string) error {
+	if upstreamModelID == "" || strings.TrimSpace(upstreamModelID) != upstreamModelID {
 		return &models.Error{Kind: models.ErrorInvalidRequest, Provider: provider, Operation: "bind_model", Code: "invalid_model", Message: "model ID is empty or has surrounding whitespace"}
 	}
-	if strings.IndexFunc(modelID, unicode.IsControl) >= 0 {
+	if strings.IndexFunc(upstreamModelID, unicode.IsControl) >= 0 {
 		return &models.Error{Kind: models.ErrorInvalidRequest, Provider: provider, Operation: "bind_model", Code: "invalid_model", Message: "model ID contains control characters"}
 	}
 	return nil

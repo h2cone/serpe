@@ -47,24 +47,24 @@ func New(config shared.Config) (*Provider, error) {
 	return &Provider{config: config, client: client}, nil
 }
 
-// Model validates and binds a physical model identifier.
-func (p *Provider) Model(modelID string) (models.Model, error) {
-	if err := shared.ValidateModelID(modelID, "anthropic"); err != nil {
+// Model validates and binds an upstream model identifier.
+func (p *Provider) Model(upstreamModelID string) (models.Model, error) {
+	if err := shared.ValidateModelID(upstreamModelID, "anthropic"); err != nil {
 		return nil, err
 	}
-	return &model{provider: p, modelID: modelID}, nil
+	return &upstreamModel{provider: p, modelID: upstreamModelID}, nil
 }
 
-type model struct {
+type upstreamModel struct {
 	provider *Provider
 	modelID  string
 }
 
-func (m *model) Capabilities() models.CapabilitySet {
+func (m *upstreamModel) Capabilities() models.CapabilitySet {
 	return defaultanthropic.ProtocolCapabilities()
 }
 
-func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
+func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "generate"); err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (m *model) Complete(ctx context.Context, req *models.Request) (*models.Resp
 	return defaultanthropic.DecodeResponseJSON(raw, capture.RequestID(), m.provider.config.Limits.MaxProviderStateBytes)
 }
 
-func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "stream"); err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (m *model) Stream(ctx context.Context, req *models.Request) (models.Stream,
 	return models.NewStream(ctx, source, models.WithStreamProvider("anthropic")), nil
 }
 
-func (m *model) encode(req *models.Request, stream bool) ([]byte, error) {
+func (m *upstreamModel) encode(req *models.Request, stream bool) ([]byte, error) {
 	if err := models.ValidateCapabilities(req, m.Capabilities(), "anthropic"); err != nil {
 		return nil, err
 	}

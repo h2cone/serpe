@@ -1,5 +1,5 @@
 // Package providers binds transport and authentication configuration to one
-// provider protocol, then derives immutable models by physical model ID.
+// provider protocol, then derives immutable models by upstream model ID.
 //
 // New and Provider.Model perform validation and allocation only; neither sends
 // a network request. Providers and their bound models are safe for concurrent
@@ -29,7 +29,7 @@ package providers
 import "github.com/h2cone/ouro/core/models"
 
 // Provider is an immutable protocol and transport binding. Model validates and
-// binds a physical model ID without network access.
+// binds an upstream model ID without network access.
 type Provider interface {
-	Model(modelID string) (models.Model, error)
+	Model(upstreamModelID string) (models.Model, error)
 }

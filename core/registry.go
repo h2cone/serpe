@@ -1,4 +1,4 @@
-// Package core exposes process-wide logical model registration and lookup.
+// Package core exposes process-wide model alias registration and lookup.
 // Provider protocol adaptation remains in core/providers.
 package core
 
@@ -12,53 +12,54 @@ import (
 )
 
 var (
-	// ErrModelNotFound is returned when a logical model name is unknown.
-	ErrModelNotFound = errors.New("logical model not found")
+	// ErrModelNotFound is returned when a model alias is unknown.
+	ErrModelNotFound = errors.New("model alias not found")
 	// ErrModelAlreadyRegistered is returned when registration would replace an
-	// existing logical model implicitly.
-	ErrModelAlreadyRegistered = errors.New("logical model already registered")
+	// existing model alias implicitly.
+	ErrModelAlreadyRegistered = errors.New("model alias already registered")
 )
 
-var logicalModels = struct {
+var modelsByAlias = struct {
 	sync.RWMutex
 	values map[string]models.Model
 }{values: make(map[string]models.Model)}
 
-// RegisterModel binds a logical name to a model. Registration never replaces
+// RegisterModel binds a model alias to an upstream model. Registration never replaces
 // an existing entry implicitly.
-func RegisterModel(name string, model models.Model) error {
-	if strings.TrimSpace(name) != name || name == "" {
-		return fmt.Errorf("register model: logical name is empty or has surrounding whitespace")
+func RegisterModel(modelAlias string, upstreamModel models.Model) error {
+	if strings.TrimSpace(modelAlias) != modelAlias || modelAlias == "" {
+		return fmt.Errorf("register model: model alias is empty or has surrounding whitespace")
 	}
-	if model == nil {
-		return fmt.Errorf("register model %q: model is nil", name)
+	if upstreamModel == nil {
+		return fmt.Errorf("register model %q: upstream model is nil", modelAlias)
 	}
-	logicalModels.Lock()
-	defer logicalModels.Unlock()
-	if _, exists := logicalModels.values[name]; exists {
-		return fmt.Errorf("%w: %s", ErrModelAlreadyRegistered, name)
+	modelsByAlias.Lock()
+	defer modelsByAlias.Unlock()
+	if _, exists := modelsByAlias.values[modelAlias]; exists {
+		return fmt.Errorf("%w: %s", ErrModelAlreadyRegistered, modelAlias)
 	}
-	logicalModels.values[name] = model
+	modelsByAlias.values[modelAlias] = upstreamModel
 	return nil
 }
 
-// UnregisterModel removes and returns a logical model. It is intended for
-// controlled shutdown and tests; callers already holding a model are unaffected.
-func UnregisterModel(name string) (models.Model, bool) {
-	logicalModels.Lock()
-	defer logicalModels.Unlock()
-	model, exists := logicalModels.values[name]
-	delete(logicalModels.values, name)
-	return model, exists
+// UnregisterModel removes a model alias and returns its upstream model. It is
+// intended for controlled shutdown and tests; callers already holding the
+// upstream model are unaffected.
+func UnregisterModel(modelAlias string) (models.Model, bool) {
+	modelsByAlias.Lock()
+	defer modelsByAlias.Unlock()
+	upstreamModel, exists := modelsByAlias.values[modelAlias]
+	delete(modelsByAlias.values, modelAlias)
+	return upstreamModel, exists
 }
 
-// Model resolves a previously registered logical model name.
-func Model(logicalName string) (models.Model, error) {
-	logicalModels.RLock()
-	model, exists := logicalModels.values[logicalName]
-	logicalModels.RUnlock()
+// Model resolves the upstream model registered under modelAlias.
+func Model(modelAlias string) (models.Model, error) {
+	modelsByAlias.RLock()
+	upstreamModel, exists := modelsByAlias.values[modelAlias]
+	modelsByAlias.RUnlock()
 	if !exists {
-		return nil, fmt.Errorf("%w: %s", ErrModelNotFound, logicalName)
+		return nil, fmt.Errorf("%w: %s", ErrModelNotFound, modelAlias)
 	}
-	return model, nil
+	return upstreamModel, nil
 }

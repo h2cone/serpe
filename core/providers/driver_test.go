@@ -58,7 +58,7 @@ func TestOfficialDriverFactory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			modelID := "physical-model"
+			modelID := "upstream-model"
 			if protocol == providers.GeminiGenerateContent {
 				modelID = "gemini-2.0-flash"
 			}
@@ -70,7 +70,7 @@ func TestOfficialDriverFactory(t *testing.T) {
 				t.Fatalf("construction made %d network calls", calls.Load())
 			}
 			if _, ok := model.(models.CapabilityReporter); !ok {
-				t.Fatal("bound model does not report adapter capabilities")
+				t.Fatal("upstream model does not report adapter capabilities")
 			}
 		})
 	}

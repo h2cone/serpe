@@ -18,6 +18,9 @@ func TestOpenAIEndpoint(t *testing.T) {
 		{"https://api.openai.com/v1/", "https://api.openai.com/v1/"},
 		{"https://proxy.example/prefix", "https://proxy.example/prefix/v1/"},
 		{"https://proxy.example/prefix/v1", "https://proxy.example/prefix/v1/"},
+		{"https://proxy.example/v2", "https://proxy.example/v2/"},
+		{"https://proxy.example/prefix/v2/", "https://proxy.example/prefix/v2/"},
+		{"https://proxy.example/prefix/v2beta1", "https://proxy.example/prefix/v2beta1/"},
 	}
 	for _, tc := range cases {
 		parsed, err := url.Parse(tc.in)
@@ -57,12 +60,14 @@ func TestAnthropicEndpoint(t *testing.T) {
 func TestGeminiEndpoint(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		in, want string
+		in, want, version string
 	}{
-		{"https://generativelanguage.googleapis.com", "https://generativelanguage.googleapis.com/"},
-		{"https://generativelanguage.googleapis.com/v1beta", "https://generativelanguage.googleapis.com/"},
-		{"https://proxy.example/prefix/v1beta", "https://proxy.example/prefix/"},
-		{"https://proxy.example/prefix/v1", "https://proxy.example/prefix/"},
+		{"https://generativelanguage.googleapis.com", "https://generativelanguage.googleapis.com/", "v1beta"},
+		{"https://generativelanguage.googleapis.com/v1beta", "https://generativelanguage.googleapis.com/", "v1beta"},
+		{"https://proxy.example/prefix/v1beta", "https://proxy.example/prefix/", "v1beta"},
+		{"https://proxy.example/prefix/v1", "https://proxy.example/prefix/", "v1"},
+		{"https://proxy.example/prefix/v2", "https://proxy.example/prefix/", "v2"},
+		{"https://proxy.example/prefix/v2beta1/", "https://proxy.example/prefix/", "v2beta1"},
 	}
 	for _, tc := range cases {
 		parsed, err := url.Parse(tc.in)
@@ -70,8 +75,8 @@ func TestGeminiEndpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 		ep := sdkhttp.GeminiEndpoint(parsed)
-		if ep.BaseURL != tc.want || ep.APIVersion != "v1beta" {
-			t.Errorf("GeminiEndpoint(%q) = %#v, want base %q v1beta", tc.in, ep, tc.want)
+		if ep.BaseURL != tc.want || ep.APIVersion != tc.version {
+			t.Errorf("GeminiEndpoint(%q) = %#v, want base %q version %q", tc.in, ep, tc.want, tc.version)
 		}
 	}
 }

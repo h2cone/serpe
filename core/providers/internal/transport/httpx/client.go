@@ -51,7 +51,7 @@ func (c *Client) Do(ctx context.Context, operation, endpoint string, query url.V
 		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: c.config.Provider, Operation: operation, Code: "invalid_endpoint", Message: "provider endpoint is not a fixed absolute path"}
 	}
 	u := c.baseURL
-	u.Path = joinEndpointPath(u.Path, endpoint)
+	u.Path = JoinEndpointPath(u.Path, endpoint)
 	u.RawPath = ""
 	u.RawQuery = query.Encode()
 	u.Fragment = ""
@@ -107,10 +107,31 @@ func (c *Client) Do(ctx context.Context, operation, endpoint string, query url.V
 	return response, nil
 }
 
-func joinEndpointPath(basePath, endpoint string) string {
+// JoinEndpointPath joins a configured base path to a fixed provider endpoint.
+// When the base path already ends in an API version segment, that caller
+// supplied version replaces the endpoint's leading default version.
+func JoinEndpointPath(basePath, endpoint string) string {
 	basePath = strings.TrimSuffix(basePath, "/")
 	if basePath == "" {
 		return endpoint
+	}
+	if _, _, versioned := SplitAPIVersionSuffix(basePath); versioned {
+		// Official SDKs may already have resolved the configured base path
+		// before adding their own version. Remove only that immediately nested
+		// version, leaving the caller's suffix in place.
+		if endpoint == basePath {
+			return endpoint
+		}
+		if strings.HasPrefix(endpoint, basePath+"/") {
+			remainder := endpoint[len(basePath):]
+			if unversioned, ok := trimLeadingAPIVersion(remainder); ok {
+				return basePath + unversioned
+			}
+			return endpoint
+		}
+		if unversioned, ok := trimLeadingAPIVersion(endpoint); ok {
+			return basePath + unversioned
+		}
 	}
 	segments := strings.Split(strings.TrimPrefix(endpoint, "/"), "/")
 	for count := len(segments); count > 0; count-- {
@@ -120,6 +141,50 @@ func joinEndpointPath(basePath, endpoint string) string {
 		}
 	}
 	return basePath + endpoint
+}
+
+// SplitAPIVersionSuffix returns a final version path segment and the path that
+// precedes it. Version segments start with a lowercase "v" and a digit, and
+// may continue with ASCII letters or digits (for example v2 or v1beta1).
+func SplitAPIVersionSuffix(path string) (prefix, version string, ok bool) {
+	path = strings.TrimSuffix(path, "/")
+	lastSlash := strings.LastIndexByte(path, '/')
+	version = path[lastSlash+1:]
+	if !isAPIVersionSegment(version) {
+		return path, "", false
+	}
+	if lastSlash < 0 {
+		return "", version, true
+	}
+	return path[:lastSlash], version, true
+}
+
+func trimLeadingAPIVersion(path string) (string, bool) {
+	if !strings.HasPrefix(path, "/") {
+		return path, false
+	}
+	remainder := path[1:]
+	segment, rest, found := strings.Cut(remainder, "/")
+	if !isAPIVersionSegment(segment) {
+		return path, false
+	}
+	if !found {
+		return "", true
+	}
+	return "/" + rest, true
+}
+
+func isAPIVersionSegment(segment string) bool {
+	if len(segment) < 2 || segment[0] != 'v' || segment[1] < '0' || segment[1] > '9' {
+		return false
+	}
+	for index := 2; index < len(segment); index++ {
+		char := segment[index]
+		if (char < '0' || char > '9') && (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 func validEndpoint(endpoint string) bool {

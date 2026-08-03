@@ -17,11 +17,15 @@ func TestJoinEndpointPathAvoidsDuplicateVersionPrefix(t *testing.T) {
 		{name: "custom prefix", base: "/custom", endpoint: "/v1/responses", want: "/custom/v1/responses"},
 		{name: "segment boundary", base: "/api-v1", endpoint: "/v1/responses", want: "/api-v1/v1/responses"},
 		{name: "gemini version", base: "/gateway/v1beta", endpoint: "/v1beta/models/gemini:generateContent", want: "/gateway/v1beta/models/gemini:generateContent"},
+		{name: "caller version override", base: "/v2", endpoint: "/v1/responses", want: "/v2/responses"},
+		{name: "prefixed caller version override", base: "/gateway/v2", endpoint: "/v1/responses", want: "/gateway/v2/responses"},
+		{name: "different beta version override", base: "/gateway/v2beta1", endpoint: "/v1beta/models/gemini:generateContent", want: "/gateway/v2beta1/models/gemini:generateContent"},
+		{name: "SDK nested default version", base: "/gateway/v2", endpoint: "/gateway/v2/v1/messages", want: "/gateway/v2/messages"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := joinEndpointPath(test.base, test.endpoint); got != test.want {
-				t.Fatalf("joinEndpointPath(%q, %q) = %q, want %q", test.base, test.endpoint, got, test.want)
+			if got := JoinEndpointPath(test.base, test.endpoint); got != test.want {
+				t.Fatalf("JoinEndpointPath(%q, %q) = %q, want %q", test.base, test.endpoint, got, test.want)
 			}
 		})
 	}

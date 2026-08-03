@@ -16,6 +16,8 @@ package sdkhttp
 import (
 	"net/url"
 	"strings"
+
+	"github.com/h2cone/ouro/core/providers/internal/transport/httpx"
 )
 
 // Endpoint describes the base URL and API version expected by a vendor SDK.
@@ -27,14 +29,14 @@ type Endpoint struct {
 	APIVersion string
 }
 
-// OpenAIEndpoint normalizes a configured base URL so the OpenAI SDK receives a
-// base that contains exactly one trailing "/v1/" segment.
+// OpenAIEndpoint normalizes a configured base URL so the OpenAI SDK receives
+// the caller's trailing API version, or "/v1/" when none was supplied.
 func OpenAIEndpoint(base *url.URL) Endpoint {
 	return normalizeEndpoint(base, "https://api.openai.com/v1/", "", func(path string) string {
 		if path == "" {
 			return "/v1"
 		}
-		if !strings.HasSuffix(path, "/v1") {
+		if _, _, ok := httpx.SplitAPIVersionSuffix(path); !ok {
 			return path + "/v1"
 		}
 		return path
@@ -49,15 +51,19 @@ func AnthropicEndpoint(base *url.URL) Endpoint {
 	})
 }
 
-// GeminiEndpoint normalizes a configured base URL and forces API version
-// "v1beta" for the Developer API.
+// GeminiEndpoint normalizes a configured base URL and uses its trailing API
+// version, defaulting to "v1beta" for the Developer API.
 func GeminiEndpoint(base *url.URL) Endpoint {
-	return normalizeEndpoint(base, "https://generativelanguage.googleapis.com/", "v1beta", func(path string) string {
-		if strings.HasSuffix(path, "/v1beta") {
-			return strings.TrimSuffix(path, "/v1beta")
+	version := "v1beta"
+	endpoint := normalizeEndpoint(base, "https://generativelanguage.googleapis.com/", version, func(path string) string {
+		if prefix, configuredVersion, ok := httpx.SplitAPIVersionSuffix(path); ok {
+			version = configuredVersion
+			return prefix
 		}
-		return strings.TrimSuffix(path, "/v1")
+		return path
 	})
+	endpoint.APIVersion = version
+	return endpoint
 }
 
 func normalizeEndpoint(base *url.URL, fallback, version string, normalizePath func(string) string) Endpoint {

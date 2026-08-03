@@ -55,6 +55,59 @@ func TestAdaptersUnaryStreamConformance(t *testing.T) {
 	}
 }
 
+func TestBaseURLVersionSuffixOverridesProtocolDefault(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		protocol    providers.Protocol
+		modelID     string
+		requestPath string
+	}{
+		{name: "openai", protocol: providers.OpenAIResponses, modelID: "model-1", requestPath: "/gateway/v2/responses"},
+		{name: "anthropic", protocol: providers.AnthropicMessages, modelID: "model-1", requestPath: "/gateway/v2/messages"},
+		{name: "gemini", protocol: providers.GeminiGenerateContent, modelID: "gemini-2.0-flash", requestPath: "/gateway/v2/models/gemini-2.0-flash:generateContent"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+				driver := driver
+				t.Run(string(driver), func(t *testing.T) {
+					t.Parallel()
+					paths := make(chan string, 1)
+					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+						paths <- request.URL.Path
+						writer.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(writer, unaryFixture(test.protocol, false))
+					}))
+					defer server.Close()
+
+					provider, err := providers.New(providers.Config{
+						Protocol: test.protocol, Driver: driver, BaseURL: server.URL + "/gateway/v2",
+						APIKey: "test-secret", HTTPClient: server.Client(),
+					})
+					if err != nil {
+						t.Fatalf("New: %v", err)
+					}
+					model, err := provider.Model(test.modelID)
+					if err != nil {
+						t.Fatalf("Model: %v", err)
+					}
+					request := models.NewTextRequest("hello")
+					request.Generation.MaxOutputTokens = models.Some(32)
+					if _, err := model.Complete(context.Background(), request); err != nil {
+						t.Fatalf("Complete: %v", err)
+					}
+					if got := <-paths; got != test.requestPath {
+						t.Fatalf("request path = %q, want %q", got, test.requestPath)
+					}
+				})
+			}
+		})
+	}
+}
+
 func runConformanceCase(t *testing.T, protocol providers.Protocol, driver providers.Driver, modelID, unaryPath, streamPath string, tool bool) {
 	t.Helper()
 	var calls atomic.Int64

@@ -14,7 +14,7 @@ import (
 // Provider matches providers.Provider without importing the public package
 // (which would create an import cycle).
 type Provider interface {
-	Model(modelID string) (models.Model, error)
+	Model(upstreamModelID string) (models.Model, error)
 }
 
 // Protocol is the typed boundary between the public provider selector and the

@@ -96,8 +96,8 @@ type Config struct {
 	// DriverDefault. Unknown values fail in New.
 	Driver Driver
 	// BaseURL may be an origin or a path prefix such as
-	// https://api.openai.com/v1. A version prefix shared with the selected
-	// protocol endpoint is joined only once.
+	// https://api.openai.com/v1. A trailing API version supplied by the caller
+	// takes precedence over the protocol default and is joined only once.
 	BaseURL       string
 	APIKey        string
 	Authenticator Authenticator

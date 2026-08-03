@@ -141,6 +141,18 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 				s.delta(key, models.Delta{Kind: models.DeltaRefusal, Text: part.Refusal}, event.ItemID, "", eventID)
 			}
 		}
+	case "response.content_part.done":
+		var part contentPartWire
+		if err := json.Unmarshal(event.Part, &part); err != nil {
+			return streamProtocol("invalid_part", "invalid completed response content part", err)
+		}
+		key := responsePartKey{kind: part.Type, outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
+		switch part.Type {
+		case "output_text":
+			return s.finishValuePart(key, models.Text(""), models.DeltaText, &part.Text, event.ItemID, eventID)
+		case "refusal":
+			return s.finishValuePart(key, models.Refusal(""), models.DeltaRefusal, &part.Refusal, event.ItemID, eventID)
+		}
 	case "response.output_text.delta":
 		key := responsePartKey{kind: "output_text", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
 		if s.parts[key] == nil {
@@ -159,6 +171,13 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			return streamProtocol("missing_tool_start", "function arguments delta before output item", nil)
 		}
 		s.delta(key, models.Delta{Kind: models.DeltaToolArguments, Text: event.Delta}, event.ItemID, "", eventID)
+	case "response.function_call_arguments.done":
+		key := responsePartKey{kind: "function_call", outputIndex: event.OutputIndex}
+		state := s.parts[key]
+		if state == nil {
+			return streamProtocol("missing_tool_start", "function arguments done before output item", nil)
+		}
+		return s.finishValuePart(key, state.content, models.DeltaToolArguments, &event.Arguments, event.ItemID, eventID)
 	case "response.reasoning_summary_part.added":
 		key := responsePartKey{kind: "reasoning_summary", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
 		s.startPart(key, models.ReasoningSummary(""), event.ItemID, "", eventID)

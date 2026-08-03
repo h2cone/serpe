@@ -9,39 +9,40 @@ import (
 )
 
 func ExampleModel() {
-	logical := logicalExampleModel{}
-	if err := core.RegisterModel("assistant-example", logical); err != nil {
+	const modelAlias = "assistant-example"
+	upstreamModel := upstreamExampleModel{}
+	if err := core.RegisterModel(modelAlias, upstreamModel); err != nil {
 		panic(err)
 	}
-	defer core.UnregisterModel("assistant-example")
+	defer core.UnregisterModel(modelAlias)
 
-	model, err := core.Model("assistant-example")
+	resolvedUpstreamModel, err := core.Model(modelAlias)
 	if err != nil {
 		panic(err)
 	}
 	// Local and cloud callers receive the same small models.Model abstraction.
-	response, err := model.Complete(context.Background(), models.NewTextRequest("hello"))
+	response, err := resolvedUpstreamModel.Complete(context.Background(), models.NewTextRequest("hello"))
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println(response.Text())
-	// Output: logical hello
+	// Output: upstream hello
 }
 
-type logicalExampleModel struct{}
+type upstreamExampleModel struct{}
 
-func (logicalExampleModel) Complete(context.Context, *models.Request) (*models.Response, error) {
+func (upstreamExampleModel) Complete(context.Context, *models.Request) (*models.Response, error) {
 	return &models.Response{
 		Provider: "example",
 		Status:   models.ResponseStatusCompleted,
 		Candidates: []models.Candidate{{
 			Index:        0,
-			Content:      []models.Content{models.Text("logical hello")},
+			Content:      []models.Content{models.Text("upstream hello")},
 			FinishReason: models.FinishStop,
 		}},
 	}, nil
 }
 
-func (logicalExampleModel) Stream(context.Context, *models.Request) (models.Stream, error) {
+func (upstreamExampleModel) Stream(context.Context, *models.Request) (models.Stream, error) {
 	return nil, fmt.Errorf("stream is not used by this example")
 }

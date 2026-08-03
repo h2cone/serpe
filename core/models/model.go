@@ -2,8 +2,9 @@ package models
 
 import "context"
 
-// Model is the minimal interface implemented by physical and logical models.
-// Implementations must be safe for concurrent use.
+// Model is the minimal interface implemented by upstream models. A model alias
+// may be registered against any implementation. Implementations must be safe
+// for concurrent use.
 type Model interface {
 	Complete(ctx context.Context, req *Request) (*Response, error)
 	Stream(ctx context.Context, req *Request) (Stream, error)

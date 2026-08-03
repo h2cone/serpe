@@ -28,15 +28,15 @@ func TestNewAndModelDoNotUseNetwork(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			model, err := provider.Model("physical-model")
-			if err != nil || model == nil {
-				t.Fatalf("Model = %#v, %v", model, err)
+			upstreamModel, err := provider.Model("upstream-model")
+			if err != nil || upstreamModel == nil {
+				t.Fatalf("Model = %#v, %v", upstreamModel, err)
 			}
 			if calls.Load() != 0 {
 				t.Fatalf("construction made %d network calls", calls.Load())
 			}
-			if _, ok := model.(models.CapabilityReporter); !ok {
-				t.Fatal("bound model does not report adapter capabilities")
+			if _, ok := upstreamModel.(models.CapabilityReporter); !ok {
+				t.Fatal("upstream model does not report adapter capabilities")
 			}
 		})
 	}

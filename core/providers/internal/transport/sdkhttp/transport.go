@@ -29,10 +29,13 @@ var authHeaderNames = []string{
 
 // BridgeConfig configures the HTTP bridge used by official SDKs.
 type BridgeConfig struct {
-	Doer               shared.Doer
-	Authenticate       shared.AuthenticateFunc
-	Headers            http.Header
-	Provider           string
+	Doer         shared.Doer
+	Authenticate shared.AuthenticateFunc
+	Headers      http.Header
+	Provider     string
+	// BasePath is the caller-configured URL path. It lets the bridge remove a
+	// vendor SDK's nested default version without changing the caller's version.
+	BasePath           string
 	Limits             shared.Limits
 	RequireContentType bool
 	// PlaceholderAuth is deleted from outgoing requests before Authenticate so
@@ -59,9 +62,13 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 
 // NewConfigBridge maps the normalized provider configuration into an SDK bridge.
 func NewConfigBridge(config shared.Config, provider string, placeholderAuth ...string) *Bridge {
+	basePath := ""
+	if config.BaseURL != nil {
+		basePath = config.BaseURL.Path
+	}
 	return NewBridge(BridgeConfig{
 		Doer: config.HTTPClient, Authenticate: config.Authenticate, Headers: config.Headers,
-		Provider: provider, Limits: config.Limits,
+		Provider: provider, BasePath: basePath, Limits: config.Limits,
 		RequireContentType: !config.Policy.IgnoreContentType, PlaceholderAuth: placeholderAuth,
 	})
 }
@@ -106,6 +113,10 @@ func (b *Bridge) Do(req *http.Request) (*http.Response, error) {
 
 	// Clone so we never mutate the SDK's request header map in place across retries.
 	out := req.Clone(ctx)
+	if out.URL != nil {
+		out.URL.Path = httpx.JoinEndpointPath(b.cfg.BasePath, out.URL.Path)
+		out.URL.RawPath = ""
+	}
 	if out.Header == nil {
 		out.Header = make(http.Header)
 	}
