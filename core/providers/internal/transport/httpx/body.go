@@ -11,27 +11,24 @@ import (
 	"github.com/h2cone/ouro/core/models"
 )
 
-// ReadJSON reads one bounded top-level JSON value, closes the body, and decodes
-// it into target.
-func ReadJSON(response *http.Response, limit int64, provider, operation string, target any) error {
+// ReadJSON reads and validates one bounded top-level JSON value, then closes
+// the body. Protocol decoding belongs to the calling Driver.
+func ReadJSON(response *http.Response, limit int64, provider, operation string) ([]byte, error) {
 	if response == nil || response.Body == nil {
-		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "missing_body", Message: "successful response has no body"}
+		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "missing_body", Message: "successful response has no body"}
 	}
 	defer response.Body.Close()
 	data, exceeded, err := readBounded(response.Body, limit)
 	if err != nil {
-		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "body_read_error", Message: "failed to read response body", RequestID: RequestID(response.Header), Cause: err}
+		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "body_read_error", Message: "failed to read response body", RequestID: RequestID(response.Header), Cause: err}
 	}
 	if exceeded {
-		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "response_too_large", Message: fmt.Sprintf("response exceeds %d bytes", limit), RequestID: RequestID(response.Header)}
+		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "response_too_large", Message: fmt.Sprintf("response exceeds %d bytes", limit), RequestID: RequestID(response.Header)}
 	}
 	if len(bytes.TrimSpace(data)) == 0 || !json.Valid(data) {
-		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "invalid_json", Message: "response is not one valid JSON value", RequestID: RequestID(response.Header)}
+		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "invalid_json", Message: "response is not one valid JSON value", RequestID: RequestID(response.Header)}
 	}
-	if err := json.Unmarshal(data, target); err != nil {
-		return &models.Error{Kind: models.ErrorProtocol, Provider: provider, Operation: operation, Code: "invalid_response", Message: "response JSON has an invalid protocol shape", RequestID: RequestID(response.Header), Cause: err}
-	}
-	return nil
+	return data, nil
 }
 
 func readBounded(reader io.Reader, limit int64) ([]byte, bool, error) {

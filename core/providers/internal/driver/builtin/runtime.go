@@ -1,4 +1,7 @@
-package httpx
+// Package builtin implements the common lifecycle for direct HTTP protocol
+// Drivers. Wire semantics remain in internal/protocol and HTTP I/O remains in
+// internal/transport/httpx.
+package builtin
 
 import (
 	"context"
@@ -7,11 +10,12 @@ import (
 
 	"github.com/h2cone/ouro/core/models"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
+	"github.com/h2cone/ouro/core/providers/internal/transport/httpx"
 	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
 )
 
 // Adapter contains the protocol-specific operations used by the built-in HTTP
-// driver. Provider owns the common immutable model, request, and stream flow.
+// Driver. Provider owns the common immutable model, request, and stream flow.
 type Adapter struct {
 	Provider         string
 	Capabilities     models.CapabilitySet
@@ -23,21 +27,21 @@ type Adapter struct {
 	BindModel        func(string) (string, error)
 	Route            func(string, bool) (string, url.Values)
 	Encode           func(string, *models.Request, bool, shared.Config) ([]byte, error)
-	Decode           func(*http.Response, string, shared.Config) (*models.Response, error)
+	Decode           func([]byte, string, string, shared.Config) (*models.Response, error)
 	NewSource        func(*sse.Reader, string, string, shared.Config) models.EventSource
 }
 
 // Provider implements the lifecycle shared by built-in HTTP protocol adapters.
 type Provider struct {
 	config  shared.Config
-	client  *Client
+	client  *httpx.Client
 	adapter Adapter
 }
 
 // NewProvider constructs a built-in provider without network access.
 func NewProvider(config shared.Config, adapter Adapter) *Provider {
 	adapter.Headers = adapter.Headers.Clone()
-	return &Provider{config: config, adapter: adapter, client: New(Config{
+	return &Provider{config: config, adapter: adapter, client: httpx.New(httpx.Config{
 		BaseURL: config.BaseURL, Doer: config.HTTPClient, Authenticate: config.Authenticate,
 		Headers: config.Headers, Provider: config.Provider,
 		MaxErrorResponseBytes: config.Limits.MaxErrorResponseBytes,
@@ -65,14 +69,21 @@ type upstreamModel struct {
 	routeID  string
 }
 
-func (m *upstreamModel) Capabilities() models.CapabilitySet { return m.provider.adapter.Capabilities }
+func (m *upstreamModel) Capabilities() models.CapabilitySet {
+	return m.provider.adapter.Capabilities
+}
 
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	response, err := m.send(ctx, req, false)
 	if err != nil {
 		return nil, err
 	}
-	return m.provider.adapter.Decode(response, m.modelID, m.provider.config)
+	config := m.provider.config
+	raw, err := httpx.ReadJSON(response, config.Limits.MaxResponseBytes, m.provider.adapter.Provider, "generate")
+	if err != nil {
+		return nil, err
+	}
+	return m.provider.adapter.Decode(raw, httpx.RequestID(response.Header), m.modelID, config)
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
@@ -83,7 +94,7 @@ func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models
 	config := m.provider.config
 	source := m.provider.adapter.NewSource(
 		sse.NewReader(response.Body, config.Limits.MaxSSEEventBytes),
-		RequestID(response.Header), m.modelID, config,
+		httpx.RequestID(response.Header), m.modelID, config,
 	)
 	return models.NewStream(ctx, source, models.WithStreamProvider(m.provider.adapter.Provider)), nil
 }
@@ -116,15 +127,4 @@ func (m *upstreamModel) send(ctx context.Context, req *models.Request, stream bo
 		operation = "stream"
 	}
 	return m.provider.client.Do(ctx, operation, endpoint, query, payload, stream, req.RequestID, headers)
-}
-
-// JSONDecoder adapts a typed wire decoder to the common bounded HTTP flow.
-func JSONDecoder[T any](provider string, decode func(T, string, string, shared.Config) (*models.Response, error)) func(*http.Response, string, shared.Config) (*models.Response, error) {
-	return func(response *http.Response, modelID string, config shared.Config) (*models.Response, error) {
-		var wire T
-		if err := ReadJSON(response, config.Limits.MaxResponseBytes, provider, "generate", &wire); err != nil {
-			return nil, err
-		}
-		return decode(wire, RequestID(response.Header), modelID, config)
-	}
 }

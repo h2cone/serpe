@@ -13,13 +13,3 @@ const (
 	// GeminiGenerateContent selects Gemini generateContent endpoints.
 	GeminiGenerateContent Protocol = "gemini.generate_content"
 )
-
-var protocolDetails = map[Protocol]struct{ provider, baseURL string }{
-	OpenAIChatCompletions: {"openai", "https://api.openai.com"},
-	OpenAIResponses:       {"openai", "https://api.openai.com"},
-	AnthropicMessages:     {"anthropic", "https://api.anthropic.com"},
-	GeminiGenerateContent: {"google", "https://generativelanguage.googleapis.com"},
-}
-
-func (p Protocol) providerName() string   { return protocolDetails[p].provider }
-func (p Protocol) defaultBaseURL() string { return protocolDetails[p].baseURL }

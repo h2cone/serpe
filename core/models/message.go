@@ -82,7 +82,8 @@ func (m Message) Validate() error {
 	return nil
 }
 
-func (m Message) clone() Message {
+// Clone returns a deep copy safe for the caller to retain and modify.
+func (m Message) Clone() Message {
 	out := Message{Role: m.Role, ProviderState: m.ProviderState.clone()}
 	out.Content = cloneContents(m.Content)
 	return out

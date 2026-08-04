@@ -1,10 +1,12 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strings"
+
+	"github.com/h2cone/ouro/internal/jsonvalue"
 )
 
 // ContentKind identifies a member of the closed Content union.
@@ -149,7 +151,7 @@ func (c Content) Validate() error {
 		if c.ToolCall.Name == "" {
 			return fmt.Errorf("content: tool call name is required")
 		}
-		if !jsonObject(c.ToolCall.Arguments) {
+		if !jsonvalue.IsObject(c.ToolCall.Arguments) {
 			return fmt.Errorf("content: tool call arguments must be a JSON object")
 		}
 	case ContentToolResult:
@@ -207,23 +209,19 @@ func validateImage(image ImageContent) error {
 	return nil
 }
 
-func jsonObject(raw json.RawMessage) bool {
-	trimmed := strings.TrimSpace(string(raw))
-	return len(trimmed) >= 2 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' && json.Valid(raw)
-}
-
 func cloneContents(in []Content) []Content {
 	if in == nil {
 		return nil
 	}
 	out := make([]Content, len(in))
 	for i := range in {
-		out[i] = in[i].clone()
+		out[i] = in[i].Clone()
 	}
 	return out
 }
 
-func (c Content) clone() Content {
+// Clone returns a deep copy safe for the caller to retain and modify.
+func (c Content) Clone() Content {
 	out := Content{Kind: c.Kind}
 	if c.Text != nil {
 		v := *c.Text
@@ -253,4 +251,53 @@ func (c Content) clone() Content {
 		out.Refusal = &v
 	}
 	return out
+}
+
+// Equal reports whether two content blocks carry the same normalized meaning.
+// Tool arguments are compared as JSON values, ignoring insignificant
+// whitespace and object-key order while preserving number lexemes.
+func (c Content) Equal(other Content) bool {
+	if c.Kind != other.Kind {
+		return false
+	}
+	switch c.Kind {
+	case ContentText:
+		return c.Text != nil && other.Text != nil && c.Text.Text == other.Text.Text
+	case ContentImage:
+		return c.Image != nil && other.Image != nil &&
+			c.Image.URI == other.Image.URI &&
+			c.Image.MIMEType == other.Image.MIMEType &&
+			c.Image.Detail == other.Image.Detail &&
+			bytes.Equal(c.Image.Data, other.Image.Data)
+	case ContentToolCall:
+		return c.ToolCall != nil && other.ToolCall != nil &&
+			c.ToolCall.ID == other.ToolCall.ID &&
+			c.ToolCall.Name == other.ToolCall.Name &&
+			jsonvalue.Equal(c.ToolCall.Arguments, other.ToolCall.Arguments)
+	case ContentToolResult:
+		return c.ToolResult != nil && other.ToolResult != nil &&
+			c.ToolResult.CallID == other.ToolResult.CallID &&
+			c.ToolResult.Name == other.ToolResult.Name &&
+			c.ToolResult.IsError == other.ToolResult.IsError &&
+			equalContents(c.ToolResult.Content, other.ToolResult.Content)
+	case ContentReasoningSummary:
+		return c.ReasoningSummary != nil && other.ReasoningSummary != nil &&
+			c.ReasoningSummary.Text == other.ReasoningSummary.Text
+	case ContentRefusal:
+		return c.Refusal != nil && other.Refusal != nil && c.Refusal.Text == other.Refusal.Text
+	default:
+		return false
+	}
+}
+
+func equalContents(left, right []Content) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !left[i].Equal(right[i]) {
+			return false
+		}
+	}
+	return true
 }

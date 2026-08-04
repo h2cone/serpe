@@ -6,31 +6,48 @@ The harness owns the loop around the model: assemble context, stream a response,
 execute tool calls, append their results, and continue until the task is done.
 Provider-specific details stay behind a small, shared model API.
 
-The repository currently contains:
+## Design
 
-- provider-neutral messages, responses, streams, and tools;
-- adapters for OpenAI, Anthropic, and Gemini protocols;
-- a minimal tool-calling loop in [`main.go`](main.go).
+The module is layered so that the agent loop never depends on any provider. A
+`models.Model` is the only seam between them: providers produce one, the agent
+consumes it.
 
-This is an early project. Its API and structure will change as the harness takes
-shape.
+- **`core/models`** — provider-neutral requests, responses, streaming events,
+  tools, and the `Model` invocation interface. The foundation everything else
+  builds on; depends only on the standard library and `internal/jsonvalue`.
+- **`core/providers`** — a static catalog mapping a wire `Protocol` (OpenAI
+  Chat/Responses, Anthropic Messages, Google GenerateContent) to a concrete
+  driver, selected via `Driver` between a hand-written HTTP driver and the
+  vendor's official SDK. Internals are split by concern:
+  - `internal/protocol/*` — request/response codecs per vendor;
+  - `internal/transport/*` — HTTP, SSE, and SDK transports;
+  - `internal/driver/{builtin,official}` — the two driver families.
+- **`agent`** — the reusable runtime: `Runner`, tools, limits, and run-level
+  events over a pull-based `Stream`. Depends only on `core/models`.
+- **`main.go`** — a thin CLI that assembles a provider model and a `Runner`,
+  then renders events. It holds no logic of its own.
 
-## Run
+## Dependency graph
 
-The example requires Go 1.26.5 and an OpenAI-compatible Responses endpoint.
-
-```powershell
-$env:OPENAI_API_KEY = "..."
-$env:OPENAI_BASE_URL = "https://..."
-go run . "What time is it?"
+```
+                      main.go
+                     ╱        ╲
+                 agent      core/providers
+                    │             │
+                    │        internal/
+                    │        ├ driver/{builtin, official}
+                    │        ├ protocol/{anthropic, google, openai}
+                    │        └ transport/{httpx, sse, sdkhttp}
+                    │             │
+                    └──────► core/models ◄──────┘
+                               │
+                               ▼
+                        internal/jsonvalue
 ```
 
-## Develop
-
-```sh
-go test ./...
-go vet ./...
-```
+Both `agent` and the provider stack converge on `core/models`; `agent` never
+imports `core/providers`. `internal/jsonvalue` is a small leaf shared by
+`core/models` and `agent`.
 
 ## License
 

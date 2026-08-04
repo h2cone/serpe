@@ -107,17 +107,13 @@ type Config struct {
 	Headers       http.Header
 }
 
-func normalizeConfig(config Config) (shared.Config, error) {
-	provider := config.Protocol.providerName()
-	if provider == "" {
-		return shared.Config{}, fmt.Errorf("providers: missing or unknown protocol %q", config.Protocol)
-	}
+func normalizeConfig(config Config, spec protocolSpec) (shared.Config, error) {
 	if config.APIKey != "" && config.Authenticator != nil {
 		return shared.Config{}, fmt.Errorf("providers: APIKey and Authenticator are mutually exclusive")
 	}
 	base := config.BaseURL
 	if base == "" {
-		base = config.Protocol.defaultBaseURL()
+		base = spec.defaultBaseURL
 	}
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -159,19 +155,12 @@ func normalizeConfig(config Config) (shared.Config, error) {
 		key := config.APIKey
 		redact = []string{key}
 		authenticate = func(_ context.Context, request *http.Request) error {
-			switch config.Protocol {
-			case OpenAIChatCompletions, OpenAIResponses:
-				request.Header.Set("Authorization", "Bearer "+key)
-			case AnthropicMessages:
-				request.Header.Set("X-API-Key", key)
-			case GeminiGenerateContent:
-				request.Header.Set("X-Goog-API-Key", key)
-			}
+			request.Header.Set(spec.apiKeyHeader, spec.apiKeyPrefix+key)
 			return nil
 		}
 	}
 	return shared.Config{
-		Provider: provider, BaseURL: parsed,
+		Provider: spec.provider, BaseURL: parsed,
 		HTTPClient: doer, Authenticate: authenticate, Headers: headers,
 		Limits: limits,
 		Policy: shared.Policy{

@@ -1,9 +1,23 @@
+// Package responses implements OpenAI Responses wire semantics.
 package responses
 
 import (
 	"encoding/json"
 
 	"github.com/h2cone/ouro/core/models"
+)
+
+const protocol = "openai.responses"
+
+var capabilities = models.Capabilities(
+	models.CapabilityText,
+	models.CapabilityImageInput,
+	models.CapabilityTools,
+	models.CapabilityParallelTools,
+	models.CapabilityJSONOutput,
+	models.CapabilityJSONSchema,
+	models.CapabilityReasoningSummary,
+	models.CapabilityProviderState,
 )
 
 // ProtocolCapabilities returns the adapter capability ceiling.

@@ -1,3 +1,4 @@
+// Package chatcompletions implements OpenAI Chat Completions wire semantics.
 package chatcompletions
 
 import (
@@ -5,6 +6,18 @@ import (
 
 	"github.com/h2cone/ouro/core/models"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
+)
+
+const protocol = "openai.chat_completions"
+
+var capabilities = models.Capabilities(
+	models.CapabilityText,
+	models.CapabilityImageInput,
+	models.CapabilityTools,
+	models.CapabilityParallelTools,
+	models.CapabilityJSONOutput,
+	models.CapabilityJSONSchema,
+	models.CapabilityMultipleCandidates,
 )
 
 // ProtocolCapabilities returns the adapter capability ceiling.

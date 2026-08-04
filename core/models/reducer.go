@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/h2cone/ouro/internal/jsonvalue"
 )
 
 type partKey struct {
@@ -43,6 +45,9 @@ func newReducer(provider string) *reducer {
 }
 
 func (r *reducer) apply(event Event) error {
+	if err := validateEventShape(event); err != nil {
+		return r.protocol("invalid event shape: " + err.Error())
+	}
 	if r.ended {
 		return r.protocol("event received after response_end")
 	}
@@ -58,7 +63,7 @@ func (r *reducer) apply(event Event) error {
 	case EventResponseEnd:
 		return r.end(event)
 	default:
-		return r.protocol(fmt.Sprintf("unknown event kind %q", event.Kind))
+		panic("validateEventShape accepted an unknown event kind")
 	}
 }
 
@@ -92,17 +97,11 @@ func (r *reducer) startPart(event Event) error {
 	if !r.started {
 		return r.protocol("part_start before response_start")
 	}
-	if event.CandidateIndex < 0 || event.PartIndex < 0 {
-		return r.protocol("part indexes must be non-negative")
-	}
 	key := partKey{candidate: event.CandidateIndex, part: event.PartIndex}
 	if _, exists := r.parts[key]; exists {
 		return r.protocol("duplicate part_start")
 	}
-	if err := validatePartStart(event.Part); err != nil {
-		return r.protocol(err.Error())
-	}
-	part := &partAccumulator{content: event.Part.clone()}
+	part := &partAccumulator{content: event.Part.Clone()}
 	r.parts[key] = part
 	candidate := r.candidates[event.CandidateIndex]
 	if candidate == nil {
@@ -134,7 +133,7 @@ func validatePartStart(content Content) error {
 		if content.ToolCall == nil || unionCount(content) != 1 || content.ToolCall.Name == "" {
 			return fmt.Errorf("tool-call part_start requires a name")
 		}
-		if len(content.ToolCall.Arguments) > 0 && !jsonObject(content.ToolCall.Arguments) {
+		if len(content.ToolCall.Arguments) > 0 && !jsonvalue.IsObject(content.ToolCall.Arguments) {
 			return fmt.Errorf("tool-call part_start arguments must be a JSON object")
 		}
 	case ContentReasoningSummary:
@@ -304,7 +303,7 @@ func (r *reducer) end(event Event) error {
 			candidate.FinishReason = FinishUnknown
 		}
 		for _, partIndex := range partIndexes {
-			candidate.Content = append(candidate.Content, acc.parts[partIndex].content.clone())
+			candidate.Content = append(candidate.Content, acc.parts[partIndex].content.Clone())
 		}
 		r.response.Candidates = append(r.response.Candidates, candidate)
 	}

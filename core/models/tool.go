@@ -3,6 +3,8 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/h2cone/ouro/internal/jsonvalue"
 )
 
 // Tool defines a client-side function available to a model.
@@ -18,12 +20,19 @@ func NewTool(name, description string, parameters json.RawMessage) Tool {
 	return Tool{Name: name, Description: description, Parameters: append(json.RawMessage(nil), parameters...)}
 }
 
+// Clone returns a deep copy safe for the caller to retain and modify.
+func (t Tool) Clone() Tool {
+	out := t
+	out.Parameters = append(json.RawMessage(nil), t.Parameters...)
+	return out
+}
+
 // Validate checks a tool definition.
 func (t Tool) Validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("tool: name is required")
 	}
-	if !jsonObject(t.Parameters) {
+	if !jsonvalue.IsObject(t.Parameters) {
 		return fmt.Errorf("tool %q: parameters must be a JSON Schema object", t.Name)
 	}
 	return nil
@@ -86,7 +95,7 @@ func (f ResponseFormat) validate() error {
 	case "", ResponseFormatText, ResponseFormatJSONObject:
 		return nil
 	case ResponseFormatJSONSchema:
-		if f.Name == "" || !jsonObject(f.Schema) {
+		if f.Name == "" || !jsonvalue.IsObject(f.Schema) {
 			return fmt.Errorf("response format: JSON Schema name and object schema are required")
 		}
 		return nil

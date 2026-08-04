@@ -104,7 +104,7 @@ func (s *eventStream) Next() bool {
 		s.err = err
 		return false
 	}
-	s.current = event.clone()
+	s.current = event.Clone()
 	if event.Kind == EventResponseEnd {
 		s.terminalSeen = true
 	}
@@ -114,7 +114,7 @@ func (s *eventStream) Next() bool {
 func (s *eventStream) Event() Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.current.clone()
+	return s.current.Clone()
 }
 
 func (s *eventStream) Text() string {

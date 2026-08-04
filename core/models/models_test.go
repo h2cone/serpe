@@ -193,6 +193,117 @@ func TestStreamCloseUnblocksNext(t *testing.T) {
 	}
 }
 
+func TestCloneAliasesIsolated(t *testing.T) {
+	t.Parallel()
+	img := models.ImageBytes("image/png", []byte{1, 2, 3})
+	call := models.ToolCallContent("c1", "lookup", json.RawMessage(`{"q":"x"}`))
+	result := models.ToolResultContent("c1", "lookup", false, models.Text("ok"), models.ImageBytes("image/png", []byte{9}))
+	msg := models.Message{
+		Role:          models.RoleAssistant,
+		Content:       []models.Content{models.Text("hi"), img, call, result, models.ReasoningSummary("r"), models.Refusal("no")},
+		ProviderState: &models.ProviderState{Provider: "p", Data: json.RawMessage(`{"k":1}`)},
+	}
+	clonedMsg := msg.Clone()
+	msg.Content[0].Text.Text = "mutated"
+	msg.Content[1].Image.Data[0] = 99
+	msg.Content[2].ToolCall.Arguments[0] = 'X'
+	msg.Content[3].ToolResult.Content[0].Text.Text = "mutated"
+	msg.ProviderState.Data[0] = 'X'
+	if clonedMsg.Content[0].Text.Text != "hi" || clonedMsg.Content[1].Image.Data[0] != 1 {
+		t.Fatal("Message.Clone shares content storage")
+	}
+	if string(clonedMsg.Content[2].ToolCall.Arguments) != `{"q":"x"}` {
+		t.Fatal("Message.Clone shares tool call arguments")
+	}
+	if clonedMsg.Content[3].ToolResult.Content[0].Text.Text != "ok" {
+		t.Fatal("Message.Clone shares tool result content")
+	}
+	if string(clonedMsg.ProviderState.Data) != `{"k":1}` {
+		t.Fatal("Message.Clone shares provider state")
+	}
+
+	freshImg := models.ImageBytes("image/png", []byte{1, 2, 3})
+	contentClone := freshImg.Clone()
+	freshImg.Image.Data[0] = 7
+	if contentClone.Image.Data[0] != 1 {
+		t.Fatal("Content.Clone shares image bytes")
+	}
+
+	event := models.Event{
+		Kind:  models.EventPartDelta,
+		Part:  models.Text("p"),
+		Delta: models.Delta{Kind: models.DeltaMediaBytes, Media: []byte{4, 5}},
+		Response: &models.ResponseInfo{
+			Provider:      "p",
+			Metadata:      map[string]string{"a": "b"},
+			ProviderState: &models.ProviderState{Provider: "p", Data: json.RawMessage(`1`)},
+		},
+		Finishes: []models.CandidateFinish{{
+			CandidateIndex: 0,
+			ProviderState:  &models.ProviderState{Provider: "p", Data: json.RawMessage(`2`)},
+		}},
+		Usage: &models.Usage{TotalTokens: models.Some(int64(3)), Raw: json.RawMessage(`{}`)},
+	}
+	eventClone := event.Clone()
+	event.Delta.Media[0] = 0
+	event.Response.Metadata["a"] = "z"
+	event.Response.ProviderState.Data[0] = '9'
+	event.Finishes[0].ProviderState.Data[0] = '9'
+	event.Usage.Raw[0] = '9'
+	if eventClone.Delta.Media[0] != 4 || eventClone.Response.Metadata["a"] != "b" {
+		t.Fatal("Event.Clone shares nested storage")
+	}
+	if string(eventClone.Response.ProviderState.Data) != `1` || string(eventClone.Finishes[0].ProviderState.Data) != `2` {
+		t.Fatal("Event.Clone shares provider state")
+	}
+
+	req := &models.Request{
+		Instructions:   []models.Instruction{{Role: models.InstructionSystem, Text: "sys"}},
+		Messages:       []models.Message{models.NewUserMessage(models.Text("u"), models.ImageBytes("image/png", []byte{8}))},
+		Tools:          []models.Tool{models.NewTool("t", "d", json.RawMessage(`{"type":"object"}`))},
+		ToolChoice:     models.SpecificTool("t"),
+		ResponseFormat: models.JSONSchemaFormat("n", "d", json.RawMessage(`{"type":"object"}`)),
+		Generation: models.GenerationConfig{
+			Stop:            []string{"END"},
+			MaxOutputTokens: models.Some(10),
+		},
+		RequestID:  "rid",
+		Metadata:   map[string]string{"m": "1"},
+		Extensions: map[string]json.RawMessage{"vendor.x": json.RawMessage(`{"v":1}`)},
+	}
+	reqClone := req.Clone()
+	req.Instructions[0].Text = "mut"
+	req.Messages[0].Content[0].Text.Text = "mut"
+	req.Messages[0].Content[1].Image.Data[0] = 0
+	req.Tools[0].Parameters[0] = 'X'
+	req.Generation.Stop[0] = "X"
+	req.Metadata["m"] = "X"
+	req.Extensions["vendor.x"][0] = 'X'
+	req.ResponseFormat.Schema[0] = 'X'
+	if reqClone.Instructions[0].Text != "sys" || reqClone.Messages[0].Content[0].Text.Text != "u" {
+		t.Fatal("Request.Clone shares instructions/messages")
+	}
+	if reqClone.Messages[0].Content[1].Image.Data[0] != 8 {
+		t.Fatal("Request.Clone shares image bytes")
+	}
+	if string(reqClone.Tools[0].Parameters) != `{"type":"object"}` {
+		t.Fatal("Request.Clone shares tool schema")
+	}
+	if reqClone.Generation.Stop[0] != "END" || reqClone.Metadata["m"] != "1" {
+		t.Fatal("Request.Clone shares generation/metadata")
+	}
+	if string(reqClone.Extensions["vendor.x"]) != `{"v":1}` || string(reqClone.ResponseFormat.Schema) != `{"type":"object"}` {
+		t.Fatal("Request.Clone shares extensions/schema")
+	}
+	if req.Clone() == nil {
+		t.Fatal("nil-safe Clone should return nil only for nil receiver")
+	}
+	var nilReq *models.Request
+	if nilReq.Clone() != nil {
+		t.Fatal("nil Request.Clone should return nil")
+	}
+}
+
 type sliceSource struct {
 	events []models.Event
 	index  int

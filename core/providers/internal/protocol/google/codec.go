@@ -1,3 +1,4 @@
+// Package google implements Gemini GenerateContent wire semantics.
 package google
 
 import (
@@ -8,6 +9,20 @@ import (
 
 	"github.com/h2cone/ouro/core/models"
 	"github.com/h2cone/ouro/core/providers/internal/shared"
+)
+
+const protocol = "gemini.generate_content"
+
+var capabilities = models.Capabilities(
+	models.CapabilityText,
+	models.CapabilityImageInput,
+	models.CapabilityTools,
+	models.CapabilityParallelTools,
+	models.CapabilityJSONOutput,
+	models.CapabilityJSONSchema,
+	models.CapabilityReasoningSummary,
+	models.CapabilityProviderState,
+	models.CapabilityMultipleCandidates,
 )
 
 // ProtocolCapabilities returns the adapter capability ceiling.

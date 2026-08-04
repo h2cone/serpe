@@ -73,9 +73,10 @@ type Event struct {
 	CallID          string
 }
 
-func (e Event) clone() Event {
+// Clone returns a deep copy safe for the caller to retain and modify.
+func (e Event) Clone() Event {
 	out := e
-	out.Part = e.Part.clone()
+	out.Part = e.Part.Clone()
 	out.Delta.Media = append([]byte(nil), e.Delta.Media...)
 	if e.Response != nil {
 		info := *e.Response

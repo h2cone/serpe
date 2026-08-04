@@ -11,6 +11,8 @@
 // Stream is a pull API and therefore provides natural backpressure. It emits a
 // response start, ordered part lifecycle events, and one response end. A clean
 // transport EOF before the protocol terminal is reported as ErrorProtocol,
-// never as a successful empty response. Complete and a fully consumed Stream
-// normalize equivalent provider results into the same Response shape.
+// never as a successful empty response. Response remains nil while a terminal
+// response_end event is observable and becomes available after Next reports
+// exhaustion. Complete and a fully consumed Stream normalize equivalent
+// provider results into the same Response shape.
 package models
