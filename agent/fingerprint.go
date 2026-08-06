@@ -51,29 +51,18 @@ func (e *fingerprintEncoder) writeBool(value bool) {
 	e.writeUint64(0)
 }
 
+// writeContent hashes validated content blocks via models.Content.CanonicalBytes.
+// The agent does not enumerate ContentKind here: which children are legal for a
+// tool result is owned by models.Content.Validate, and this encoding follows it.
 func (e *fingerprintEncoder) writeContent(content []models.Content) error {
 	e.writeUint64(uint64(len(content)))
 	for i := range content {
-		block := content[i]
 		e.writeUint64(uint64(i))
-		e.writeString(string(block.Kind))
-		switch block.Kind {
-		case models.ContentText:
-			if block.Text == nil {
-				return fmt.Errorf("content %d: text value is missing", i)
-			}
-			e.writeString(block.Text.Text)
-		case models.ContentImage:
-			if block.Image == nil {
-				return fmt.Errorf("content %d: image value is missing", i)
-			}
-			e.writeString(block.Image.URI)
-			e.writeString(block.Image.MIMEType)
-			e.writeString(string(block.Image.Detail))
-			e.writeBytes(block.Image.Data)
-		default:
-			return fmt.Errorf("content %d: unsupported kind %q", i, block.Kind)
+		canonical, err := content[i].CanonicalBytes()
+		if err != nil {
+			return fmt.Errorf("content %d: %w", i, err)
 		}
+		e.writeBytes(canonical)
 	}
 	return nil
 }

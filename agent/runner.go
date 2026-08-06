@@ -42,5 +42,5 @@ func (r *Runner) Stream(ctx context.Context, req *models.Request) (Stream, error
 }
 
 func (r *Runner) prepareRequest(req *models.Request) (*conversation, error) {
-	return newConversation(req, r.toolDefinitions())
+	return newConversation(req, r.tools.definitions())
 }

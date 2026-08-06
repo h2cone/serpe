@@ -12,9 +12,10 @@ import (
 
 // Stream is a synchronous, pull-based sequence of run-level events. Controlled
 // outcomes emit run_end before Next reports exhaustion; failures expose Err
-// without synthesizing run_end. Result returns a defensive snapshot at any
-// time. A stream has one reader. Close is idempotent and may run concurrently
-// with Next.
+// without synthesizing run_end. A concurrent Close cannot suppress the run_end
+// of an already-decided controlled stop. Result returns a defensive snapshot
+// at any time. A stream has one reader. Close is idempotent and may run
+// concurrently with Next.
 type Stream interface {
 	Next() bool
 	Event() Event
@@ -25,6 +26,9 @@ type Stream interface {
 
 type phase int
 
+// phase orders one run as a pull state machine. The two decision phases emit
+// no events: they apply policy decisions (terminal classification, budgets,
+// stall detection) and schedule the next step.
 const (
 	phaseRunStart phase = iota
 	phaseModelStart
@@ -38,6 +42,21 @@ const (
 	phaseDone
 )
 
+// runStream is the pull scheduler. It owns the phase order, the lock
+// protocol, Close, and the events published to the caller. Run policy
+// (terminal classification, tool choice, budgets, stall detection) lives in
+// policy.go and run_state.go; this type applies decisions, never re-derives
+// them.
+//
+// Lock protocol invariants:
+//   - mu guards every mutable field; runner, ctx, and cancel are immutable
+//     for the stream's lifetime.
+//   - No blocking I/O (model Stream calls, Tool.Execute) runs under mu.
+//   - Close may run concurrently with Next. Close cancels ctx and closes the
+//     active model stream through turn; steps re-check closed before
+//     publishing events.
+//   - stopReason is written only through runRecord.setStopReason; the first
+//     writer wins so Close cannot overwrite a policy stop.
 type runStream struct {
 	runner *Runner
 	ctx    context.Context
@@ -48,22 +67,29 @@ type runStream struct {
 	record       runRecord
 	budget       runBudget
 	ledger       callLedger
+	// current is the event most recently produced by step. Its pointer
+	// payloads (Response, ToolCall, ToolResult) are borrowed from the run
+	// record or from stack locals that escape to the heap; they are detached
+	// from mutable state only when Event returns a defensive clone. Readers
+	// must go through Event rather than reading current directly.
 	current      Event
 	err          error
 	closed       bool
 	finished     bool
 	phase        phase
 
-	forcedRelaxed  bool
+	turn           modelTurnHandle
 	turnToolChoice models.ToolChoice
 	batch          *toolBatch
-
-	modelStream models.Stream
 }
 
 func (s *runStream) Next() bool {
 	s.mu.Lock()
-	if s.finished || s.err != nil || s.closed {
+	// A controlled stop that has been decided (phaseRunEnd/phaseDone) must
+	// still emit its run_end even if a concurrent Close set closed/finished;
+	// only failures and non-terminal closes short-circuit here.
+	ready := s.phase == phaseRunEnd || s.phase == phaseDone
+	if s.err != nil || ((s.finished || s.closed) && !ready) {
 		s.mu.Unlock()
 		return false
 	}
@@ -91,7 +117,9 @@ func (s *runStream) Next() bool {
 		}
 
 		s.mu.Lock()
-		if s.closed {
+		// Suppress non-terminal events after Close, but always deliver the
+		// terminal run_end of a controlled stop (see the top-of-Next guard).
+		if s.closed && event.Kind != EventRunEnd {
 			s.mu.Unlock()
 			return false
 		}
@@ -120,17 +148,12 @@ func (s *runStream) fail(err error) {
 		return
 	}
 	s.err = err
-	if s.record.stopReason == "" {
-		if errors.Is(err, context.Canceled) {
-			s.record.stopReason = StopCancelled
-		} else {
-			s.record.stopReason = StopFailed
-		}
+	if errors.Is(err, context.Canceled) {
+		s.record.setStopReason(StopCancelled)
+	} else {
+		s.record.setStopReason(StopFailed)
 	}
-	if s.modelStream != nil {
-		_ = s.modelStream.Close()
-		s.modelStream = nil
-	}
+	_ = s.turn.close()
 	s.finished = true
 }
 
@@ -147,7 +170,7 @@ func (s *runStream) step() (*Event, bool, error) {
 		s.mu.Lock()
 		s.phase = phaseModelStart
 		s.mu.Unlock()
-		return &Event{Kind: EventRunStart}, false, nil
+		return newRunStartEvent(), false, nil
 
 	case phaseModelStart:
 		return s.beginModelTurn()
@@ -159,7 +182,7 @@ func (s *runStream) step() (*Event, bool, error) {
 		return s.emitModelEnd()
 
 	case phaseDecideAfterModel:
-		return nil, true, s.decideAfterModel()
+		return nil, true, s.applyAfterModel()
 
 	case phaseToolStart:
 		return s.emitToolStart()
@@ -175,7 +198,7 @@ func (s *runStream) step() (*Event, bool, error) {
 		reason := s.record.stopReason
 		s.phase = phaseDone
 		s.mu.Unlock()
-		return &Event{Kind: EventRunEnd, StopReason: reason}, false, nil
+		return newRunEndEvent(reason), false, nil
 
 	case phaseDone:
 		return nil, false, nil
@@ -189,16 +212,12 @@ func (s *runStream) beginModelTurn() (*Event, bool, error) {
 	s.mu.Lock()
 	turn, ok := s.budget.beginModelTurn()
 	if !ok {
-		s.record.stopReason = StopMaxModelTurns
+		s.record.setStopReason(StopMaxModelTurns)
 		s.phase = phaseRunEnd
 		s.mu.Unlock()
 		return nil, true, nil
 	}
-	choice := s.conversation.toolChoice()
-	// After the first tool batch, forced tool choice is relaxed.
-	if s.forcedRelaxed && choice.Kind != models.ToolChoiceNone {
-		choice = models.ToolChoice{Kind: models.ToolChoiceAuto}
-	}
+	choice := resolveToolChoice(s.conversation.toolChoice(), s.budget.completedToolBatches())
 	s.turnToolChoice = choice
 	req := s.conversation.request(choice)
 	s.mu.Unlock()
@@ -226,16 +245,16 @@ func (s *runStream) beginModelTurn() (*Event, bool, error) {
 		}
 		return nil, false, ctxErr
 	}
-	s.modelStream = stream
+	s.turn.attach(stream)
 	s.phase = phaseModelStream
 	s.mu.Unlock()
 
-	return &Event{Kind: EventModelStart, ModelTurn: turn}, false, nil
+	return newModelStartEvent(turn), false, nil
 }
 
 func (s *runStream) consumeModelEvent() (*Event, bool, error) {
 	s.mu.Lock()
-	ms := s.modelStream
+	ms := s.turn.active()
 	turn := s.budget.modelTurns
 	s.mu.Unlock()
 
@@ -244,28 +263,22 @@ func (s *runStream) consumeModelEvent() (*Event, bool, error) {
 	}
 
 	if ms.Next() {
-		ev := ms.Event()
-		return &Event{Kind: EventModel, ModelTurn: turn, Model: ev}, false, nil
+		return newModelEvent(turn, ms.Event()), false, nil
 	}
 	if err := ms.Err(); err != nil {
+		s.detachTurn()
 		_ = ms.Close()
-		s.mu.Lock()
-		s.modelStream = nil
-		s.mu.Unlock()
 		return nil, false, err
 	}
 
 	resp := ms.Response()
+	s.detachTurn()
 	_ = ms.Close()
 
 	if resp == nil {
-		s.mu.Lock()
-		s.modelStream = nil
-		s.mu.Unlock()
 		return nil, false, fmt.Errorf("%w: nil response", ErrInvalidModelResponse)
 	}
 	s.mu.Lock()
-	s.modelStream = nil
 	owned := s.record.appendResponse(resp)
 	usageErr := s.budget.observeTokens(owned.Usage)
 	if usageErr == nil {
@@ -279,33 +292,42 @@ func (s *runStream) consumeModelEvent() (*Event, bool, error) {
 	return nil, true, nil
 }
 
+// detachTurn clears the active model turn stream under the lock so a
+// concurrent close path cannot double-close the stream the caller is
+// finishing. The caller closes the detached stream exactly once.
+func (s *runStream) detachTurn() {
+	s.mu.Lock()
+	s.turn.detach()
+	s.mu.Unlock()
+}
+
 func (s *runStream) emitModelEnd() (*Event, bool, error) {
 	s.mu.Lock()
 	turn := s.budget.modelTurns
 	resp := s.record.lastResponse()
 	s.phase = phaseDecideAfterModel
 	s.mu.Unlock()
-	return &Event{Kind: EventModelEnd, ModelTurn: turn, Response: resp}, false, nil
+	return newModelEndEvent(turn, resp), false, nil
 }
 
-func (s *runStream) decideAfterModel() error {
+// applyAfterModel applies the policy decision for the finished model turn:
+// commit the assistant turn, stop, or schedule tool execution. All business
+// decisions come from policy.decideAfterModel and runBudget.
+func (s *runStream) applyAfterModel() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	classified, err := classifyModelResponse(s.record.lastResponse())
+	decision, err := decideAfterModel(s.record.lastResponse(), s.turnToolChoice)
 	if err != nil {
 		return err
 	}
-	if err := validateToolChoice(s.turnToolChoice, classified.calls); err != nil {
-		return err
-	}
-	if classified.action == afterModelComplete {
-		s.conversation.appendAssistant(classified.assistant)
-		s.record.stopReason = StopCompleted
+	if decision.action == afterModelComplete {
+		s.conversation.appendAssistant(decision.assistant)
+		s.record.setStopReason(StopCompleted)
 		s.phase = phaseRunEnd
 		return nil
 	}
-	calls := classified.calls
+	calls := decision.calls
 
 	// Validate every call before recording the assistant turn or performing a
 	// side effect. IDs are unique across the entire run, and arguments must be
@@ -313,12 +335,12 @@ func (s *runStream) decideAfterModel() error {
 	if err := s.ledger.accept(calls); err != nil {
 		return err
 	}
-	s.conversation.appendAssistant(classified.assistant)
+	s.conversation.appendAssistant(decision.assistant)
 
 	// Budget preflight is atomic: execute none unless the complete batch fits
 	// and a subsequent model turn can consume its results.
 	if reason := s.budget.stopBeforeTools(len(calls)); reason != "" {
-		s.record.stopReason = reason
+		s.record.setStopReason(reason)
 		s.phase = phaseRunEnd
 		return nil
 	}
@@ -340,12 +362,7 @@ func (s *runStream) emitToolStart() (*Event, bool, error) {
 	turn := s.budget.modelTurns
 	idx := s.batch.index
 	s.phase = phaseToolExec
-	return &Event{
-		Kind:      EventToolStart,
-		ModelTurn: turn,
-		ToolIndex: idx,
-		ToolCall:  &call,
-	}, false, nil
+	return newToolStartEvent(turn, idx, &call), false, nil
 }
 
 func (s *runStream) executeTool() (*Event, bool, error) {
@@ -377,17 +394,11 @@ func (s *runStream) executeTool() (*Event, bool, error) {
 	}
 	s.mu.Unlock()
 
-	return &Event{
-		Kind:       EventToolEnd,
-		ModelTurn:  turn,
-		ToolIndex:  idx,
-		ToolCall:   &call,
-		ToolResult: &result,
-	}, false, nil
+	return newToolEndEvent(turn, idx, &call, &result), false, nil
 }
 
 func (s *runStream) invokeTool(call models.ToolCall) (ToolResult, models.Content, error) {
-	reg, ok := s.runner.lookupTool(call.Name)
+	reg, ok := s.runner.tools.lookup(call.Name)
 	if !ok {
 		result := ErrorResult(fmt.Sprintf("unknown tool %q", call.Name))
 		content, err := normalizeToolOutput(call, result)
@@ -424,13 +435,13 @@ func (s *runStream) finishToolBatch() error {
 		return err
 	}
 	if s.budget.recordStep(fp) {
-		s.record.stopReason = StopStalled
+		s.record.setStopReason(StopStalled)
 		s.phase = phaseRunEnd
 		return nil
 	}
 
-	// Relax forced tool choice after the first completed tool batch.
-	s.forcedRelaxed = true
+	// A completed batch relaxes a forced tool choice for the next turn.
+	s.budget.recordToolBatch()
 	s.batch = nil
 	s.phase = phaseModelStart
 	return nil
@@ -462,28 +473,44 @@ func (s *runStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	var closeErr error
-	if s.modelStream != nil {
-		closeErr = s.modelStream.Close()
-		s.modelStream = nil
-	}
+	closeErr := s.turn.close()
 	if !s.finished && s.err == nil && s.record.stopReason == "" {
 		s.err = context.Canceled
-		s.record.stopReason = StopCancelled
+		s.record.setStopReason(StopCancelled)
 	}
 	s.finished = true
 	s.mu.Unlock()
 	return closeErr
 }
 
-func candidateZero(resp *models.Response) (models.Candidate, bool) {
-	if resp == nil {
-		return models.Candidate{}, false
+// modelTurnHandle owns the active model stream for the current turn. All
+// access happens under runStream.mu. close is idempotent and detaches, so
+// concurrent close paths (fail, Close, turn end) cannot double-close.
+type modelTurnHandle struct {
+	stream models.Stream
+}
+
+// attach replaces the active stream, closing any previous one.
+func (h *modelTurnHandle) attach(stream models.Stream) {
+	if h.stream != nil {
+		_ = h.stream.Close()
 	}
-	for i := range resp.Candidates {
-		if resp.Candidates[i].Index == 0 {
-			return resp.Candidates[i], true
-		}
+	h.stream = stream
+}
+
+// active returns the active stream without detaching it.
+func (h *modelTurnHandle) active() models.Stream { return h.stream }
+
+// detach clears the active stream without closing it; the caller closes the
+// detached stream exactly once.
+func (h *modelTurnHandle) detach() { h.stream = nil }
+
+// close closes and detaches the active stream. It is idempotent.
+func (h *modelTurnHandle) close() error {
+	if h.stream == nil {
+		return nil
 	}
-	return models.Candidate{}, false
+	err := h.stream.Close()
+	h.stream = nil
+	return err
 }

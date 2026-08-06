@@ -58,6 +58,16 @@ type runRecord struct {
 	stopReason StopReason
 }
 
+// setStopReason is the only writer of the terminal stop reason. The first
+// writer wins: a concurrent Close or fail cannot overwrite a policy stop,
+// and a late policy stop cannot overwrite an earlier terminal outcome.
+func (r *runRecord) setStopReason(reason StopReason) {
+	if r == nil || reason == "" || r.stopReason != "" {
+		return
+	}
+	r.stopReason = reason
+}
+
 func (r *runRecord) appendResponse(response *models.Response) *models.Response {
 	owned := response.Clone()
 	r.steps = append(r.steps, Step{Index: len(r.steps), Response: owned})

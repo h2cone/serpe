@@ -1,6 +1,7 @@
 package models_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -48,5 +49,78 @@ func TestContentEqualUsesJSONValueSemantics(t *testing.T) {
 	right.ToolCall.Arguments = json.RawMessage(`{"a":2,"b":1.0}`)
 	if left.Equal(right) {
 		t.Fatal("different number lexemes were considered equal")
+	}
+}
+
+func TestContentCanonicalBytesMatchesEqualSemantics(t *testing.T) {
+	t.Parallel()
+	equal := [][2]models.Content{
+		{models.Text("a"), models.Text("a")},
+		{models.ImageURI("https://example.com/a.png"), models.ImageURI("https://example.com/a.png")},
+		{models.ImageBytes("image/png", []byte{1, 2}), models.ImageBytes("image/png", []byte{1, 2})},
+		{
+			models.ToolCallContent("c", "f", json.RawMessage(`{"b":1,"a":2}`)),
+			models.ToolCallContent("c", "f", json.RawMessage(` { "a": 2, "b": 1 } `)),
+		},
+		{
+			models.ToolResultContent("c", "f", true, models.Text("ok")),
+			models.ToolResultContent("c", "f", true, models.Text("ok")),
+		},
+		{models.ReasoningSummary("a"), models.ReasoningSummary("a")},
+		{models.Refusal("a"), models.Refusal("a")},
+	}
+	for i, pair := range equal {
+		left, err := pair[0].CanonicalBytes()
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
+		right, err := pair[1].CanonicalBytes()
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
+		if !bytes.Equal(left, right) {
+			t.Fatalf("case %d: equal contents encoded differently", i)
+		}
+	}
+
+	different := [][2]models.Content{
+		{models.Text("a"), models.Text("b")},
+		{models.ImageBytes("image/png", []byte{1}), models.ImageBytes("image/png", []byte{2})},
+		{models.ReasoningSummary("a"), models.ReasoningSummary("b")},
+		{models.Refusal("a"), models.Refusal("b")},
+	}
+	for i, pair := range different {
+		left, err := pair[0].CanonicalBytes()
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
+		right, err := pair[1].CanonicalBytes()
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
+		if bytes.Equal(left, right) {
+			t.Fatalf("case %d: different contents encoded identically", i)
+		}
+	}
+
+	if _, err := (models.Content{}).CanonicalBytes(); err == nil {
+		t.Fatal("invalid content must fail to encode")
+	}
+}
+
+func TestContentCanonicalBytesFramingIsUnambiguous(t *testing.T) {
+	t.Parallel()
+	// Nested tool-result children must not collide with a flat list of the
+	// same child contents.
+	nested, err := models.ToolResultContent("c", "f", false, models.Text("a")).CanonicalBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flat, err := models.Text("a").CanonicalBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(nested, flat) {
+		t.Fatal("nested content framing collided with flat content")
 	}
 }

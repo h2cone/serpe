@@ -3,6 +3,8 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/h2cone/ouro/internal/jsonvalue"
 )
 
 // Role is the author of a conversational message.
@@ -87,4 +89,28 @@ func (m Message) Clone() Message {
 	out := Message{Role: m.Role, ProviderState: m.ProviderState.clone()}
 	out.Content = cloneContents(m.Content)
 	return out
+}
+
+// Equal reports whether two messages carry the same meaning. Tool arguments
+// and provider state data are compared as JSON values, ignoring insignificant
+// whitespace and object-key order.
+func (m Message) Equal(other Message) bool {
+	if m.Role != other.Role || len(m.Content) != len(other.Content) {
+		return false
+	}
+	for i := range m.Content {
+		if !m.Content[i].Equal(other.Content[i]) {
+			return false
+		}
+	}
+	if (m.ProviderState == nil) != (other.ProviderState == nil) {
+		return false
+	}
+	if m.ProviderState != nil {
+		if m.ProviderState.Provider != other.ProviderState.Provider ||
+			!jsonvalue.Equal(m.ProviderState.Data, other.ProviderState.Data) {
+			return false
+		}
+	}
+	return true
 }

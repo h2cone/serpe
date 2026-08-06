@@ -2,6 +2,7 @@ package models
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -252,6 +253,98 @@ func (c Content) Clone() Content {
 	}
 	return out
 }
+
+// CanonicalBytes returns a stable, unambiguous encoding of a valid content
+// block for identity comparisons such as stall detection. Equal blocks encode
+// identically; the encoding is not a wire format. Invalid blocks return an
+// error. The single validation authority is Content.Validate: callers that
+// need to distinguish valid tool-result children consume this encoding rather
+// than re-enumerating ContentKind.
+func (c Content) CanonicalBytes() ([]byte, error) {
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	encoder := newCanonicalEncoder()
+	encoder.writeString(string(c.Kind))
+	switch c.Kind {
+	case ContentText:
+		encoder.writeString(c.Text.Text)
+	case ContentImage:
+		encoder.writeString(c.Image.URI)
+		encoder.writeString(c.Image.MIMEType)
+		encoder.writeString(string(c.Image.Detail))
+		encoder.writeBytes(c.Image.Data)
+	case ContentToolCall:
+		encoder.writeString(c.ToolCall.ID)
+		encoder.writeString(c.ToolCall.Name)
+		canonical, err := jsonvalue.CanonicalObject(c.ToolCall.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("tool call arguments: %w", err)
+		}
+		encoder.writeBytes(canonical)
+	case ContentToolResult:
+		encoder.writeString(c.ToolResult.CallID)
+		encoder.writeString(c.ToolResult.Name)
+		encoder.writeBool(c.ToolResult.IsError)
+		if err := encoder.writeContents(c.ToolResult.Content); err != nil {
+			return nil, err
+		}
+	case ContentReasoningSummary:
+		encoder.writeString(c.ReasoningSummary.Text)
+	case ContentRefusal:
+		encoder.writeString(c.Refusal.Text)
+	default:
+		// Unreachable today because Validate rejects unknown kinds first, but
+		// guards the Equal<->canonical contract: if a new ContentKind is added
+		// to Validate without a branch here, fail loudly instead of encoding
+		// kind-only while Equal still compares the payload.
+		return nil, fmt.Errorf("content: canonical bytes not implemented for kind %q", c.Kind)
+	}
+	return encoder.sum(), nil
+}
+
+// canonicalEncoder frames values with length prefixes so encodings are
+// unambiguous, order-sensitive, and collision-resistant.
+type canonicalEncoder struct {
+	buf bytes.Buffer
+}
+
+func newCanonicalEncoder() *canonicalEncoder { return &canonicalEncoder{} }
+
+func (e *canonicalEncoder) writeUint64(value uint64) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], value)
+	e.buf.Write(length[:])
+}
+
+func (e *canonicalEncoder) writeBytes(value []byte) {
+	e.writeUint64(uint64(len(value)))
+	e.buf.Write(value)
+}
+
+func (e *canonicalEncoder) writeString(value string) { e.writeBytes([]byte(value)) }
+
+func (e *canonicalEncoder) writeBool(value bool) {
+	if value {
+		e.writeUint64(1)
+		return
+	}
+	e.writeUint64(0)
+}
+
+func (e *canonicalEncoder) writeContents(blocks []Content) error {
+	e.writeUint64(uint64(len(blocks)))
+	for i := range blocks {
+		canonical, err := blocks[i].CanonicalBytes()
+		if err != nil {
+			return fmt.Errorf("child %d: %w", i, err)
+		}
+		e.writeBytes(canonical)
+	}
+	return nil
+}
+
+func (e *canonicalEncoder) sum() []byte { return e.buf.Bytes() }
 
 // Equal reports whether two content blocks carry the same normalized meaning.
 // Tool arguments are compared as JSON values, ignoring insignificant

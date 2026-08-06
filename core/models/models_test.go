@@ -350,3 +350,48 @@ func (s *blockingSource) Close() error {
 	}
 	return nil
 }
+
+func TestMessageEqual(t *testing.T) {
+	t.Parallel()
+	base := models.Message{
+		Role: models.RoleAssistant,
+		Content: []models.Content{
+			models.Text("hi"),
+			models.ToolCallContent("c1", "lookup", json.RawMessage(`{"a":1,"b":2}`)),
+		},
+		ProviderState: &models.ProviderState{Provider: "p", Data: json.RawMessage(`{"x":1}`)},
+	}
+	if !base.Equal(base.Clone()) {
+		t.Fatal("message must equal its clone")
+	}
+	// JSON semantics ignore whitespace and object-key order.
+	reordered := base.Clone()
+	reordered.Content[1].ToolCall.Arguments = json.RawMessage("{\"b\":2,  \"a\":1}")
+	reordered.ProviderState.Data = json.RawMessage(" { \"x\": 1 } ")
+	if !base.Equal(reordered) {
+		t.Fatal("Equal must treat JSON values semantically")
+	}
+	cases := []struct {
+		name string
+		got  models.Message
+	}{
+		{"role", models.Message{Role: models.RoleUser, Content: base.Content}},
+		{"content length", models.Message{Role: models.RoleAssistant, Content: base.Content[:1], ProviderState: base.ProviderState}},
+		{"text", func() models.Message { m := base.Clone(); m.Content[0].Text.Text = "bye"; return m }()},
+		{"tool call", func() models.Message {
+			m := base.Clone()
+			m.Content[1].ToolCall.Arguments = json.RawMessage(`{"a":2,"b":2}`)
+			return m
+		}()},
+		{"provider", func() models.Message { m := base.Clone(); m.ProviderState.Provider = "q"; return m }()},
+		{"provider data", func() models.Message { m := base.Clone(); m.ProviderState.Data = json.RawMessage(`{"x":2}`); return m }()},
+		{"provider nil", models.Message{Role: models.RoleAssistant, Content: base.Content}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if base.Equal(tt.got) {
+				t.Fatalf("messages must differ on %s", tt.name)
+			}
+		})
+	}
+}

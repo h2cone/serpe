@@ -51,6 +51,8 @@ type registeredTool struct {
 	definition models.Tool
 }
 
+// toolSet owns the registered tool registry: construction-time validation and
+// snapshots, name lookup, and defensive definition projection.
 type toolSet struct {
 	ordered []registeredTool
 	byName  map[string]int
@@ -79,23 +81,25 @@ func registerTools(tools []Tool) (toolSet, error) {
 	return out, nil
 }
 
-func (r *Runner) toolDefinitions() []models.Tool {
-	if len(r.tools.ordered) == 0 {
+// definitions returns a defensive snapshot of all registered tool definitions.
+func (ts toolSet) definitions() []models.Tool {
+	if len(ts.ordered) == 0 {
 		return nil
 	}
-	out := make([]models.Tool, len(r.tools.ordered))
-	for i := range r.tools.ordered {
-		out[i] = r.tools.ordered[i].definition.Clone()
+	out := make([]models.Tool, len(ts.ordered))
+	for i := range ts.ordered {
+		out[i] = ts.ordered[i].definition.Clone()
 	}
 	return out
 }
 
-func (r *Runner) lookupTool(name string) (registeredTool, bool) {
-	index, ok := r.tools.byName[name]
+// lookup resolves a tool by name.
+func (ts toolSet) lookup(name string) (registeredTool, bool) {
+	index, ok := ts.byName[name]
 	if !ok {
 		return registeredTool{}, false
 	}
-	return r.tools.ordered[index], true
+	return ts.ordered[index], true
 }
 
 func normalizeToolOutput(call models.ToolCall, out ToolResult) (models.Content, error) {

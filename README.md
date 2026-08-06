@@ -1,59 +1,99 @@
 # ouro
 
-Ouro is my attempt to build an Agent Harness in Go.
-
-The harness owns the loop around the model: assemble context, stream a response,
-execute tool calls, append their results, and continue until the task is done.
-Provider-specific details stay behind a small, shared model API.
-
-## Design
-
-The module is layered so that the agent loop never depends on any provider. A
-`models.Model` is the only seam between them: providers produce one, the agent
-consumes it.
-
-- **`core/models`** — provider-neutral requests, responses, streaming events,
-  tools, and the `Model` invocation interface. The foundation everything else
-  builds on; depends only on the standard library and `internal/jsonvalue`.
-- **`core/providers`** — a static catalog mapping a wire `Protocol` (OpenAI
-  Chat/Responses, Anthropic Messages, Gemini GenerateContent) to a concrete
-  driver, selected via `Driver` between a hand-written HTTP driver and the
-  vendor's official SDK. Internals are split by concern:
-  - `internal/driver/{builtin,official}` — the two driver families;
-  - `internal/protocol/*` — request/response codecs per vendor;
-  - `internal/shared` — helpers shared across the provider internals;
-  - `internal/transport/*` — HTTP, SSE, and SDK transports.
-- **`agent`** — the reusable runtime: `Runner`, tools, limits, and run-level
-  events over a pull-based `Stream`. Depends only on `core/models` and the
-  module-private `internal/jsonvalue` leaf.
-- **`main.go`** — a thin CLI that assembles a provider model and a `Runner`,
-  then renders events. It owns wiring and rendering only; the model–tool loop
-  lives in package `agent`.
+An Agent Harness in Go. The harness owns the loop around the model: assemble
+context, stream a response, execute tool calls, append their results, and
+continue until done. Provider specifics stay behind a `models.Model` seam.
 
 ## Dependency graph
 
 ```
                       main.go
-                   ╱    │     ╲
-                  ╱     │      ╲
-             agent      │   core/providers
-                │       │          │
-                │       │     internal/
-                │       │     ├ driver/{builtin, official}
-                │       │     ├ protocol/{anthropic, google, openai}
-                │       │     ├ shared
-                │       │     └ transport/{httpx, sse, sdkhttp}
-                │       │          │
-                └───────┴──► core/models ◄──────┘
-                │                  │             │
-                ▼                  ▼             │
-             internal/jsonvalue ◄────────────────┘
+                         │
+              ┌──────────┴───────────────┐
+              │          │               │
+              agent ──► core/models ◄─── core/providers
+              │         │     ▲          │
+              │         │     │          │
+              │         │core/sessions   │
+              │         │                │
+              ▼         ▼                │
+             internal/jsonvalue ◄────────┘
 ```
 
-Both `agent` and the provider stack converge on `core/models`; `agent` never
-imports `core/providers`. `main` also imports `core/models` for request
-construction. `internal/jsonvalue` is a small leaf shared by `core/models`,
-`agent`, and the providers' `internal/shared` helpers.
+`agent` never imports `core/providers`; both converge on `core/models`.
+`internal/jsonvalue` is a leaf shared by `core/models`, `agent`, and the
+providers' `internal/shared`.
+
+## Modules
+
+### `core/models`
+
+```
+core/models ──► internal/jsonvalue
+├─ Request / Response / Event (streaming)
+├─ Tool / ToolCall / ToolChoice
+├─ Model (invocation interface)
+└─ Content: Validate · CanonicalBytes · Equal
+```
+
+### `core/providers`
+
+```
+core/providers
+└─ internal/
+   ├─ driver/{builtin, official}           ─┐
+   ├─ protocol/{anthropic, google, openai} ─┤
+   ├─ shared ──► internal/jsonvalue        ─┤
+   └─ transport/{httpx, sse, sdkhttp}      ─┤
+                                            ▼
+                                            core/models
+```
+
+### `agent`
+
+```
+agent ──► core/models
+  │
+  └──► internal/jsonvalue
+├─ Runner: Run · Stream
+├─ Tool / ToolResult / Limits
+├─ Event: run_start · model_start · model_event · model_end
+          · tool_start · tool_end · run_end
+└─ outcome: err == nil && Result.Completed()  committable
+            budget/stall stops                nil err + StopReason
+            failure                           sentinel / *models.Error
+                                              / ctx err + partial Result
+```
+
+### `core/sessions`
+
+```
+core/sessions ──► core/models
+├─ Session
+├─ Store ◄── MemoryStore
+└─ Manager: Create · Get · Fork · Update · Append · Delete
+```
+
+Minimal use:
+
+```go
+manager, _ := sessions.NewManager(sessions.NewMemoryStore())
+created, _ := manager.Create(ctx, sessions.New("sess-1", "/work"))
+_, _ = manager.Append(ctx, created.ID,
+    models.NewUserMessage(models.Text("What is in this repo?")),
+    models.NewAssistantMessage(models.Text("Let me look.")),
+)
+```
+
+### `main.go`
+
+```
+main.go ─┬─► agent
+         ├─► core/models
+         └─► core/providers
+```
+
+Wiring and rendering only; the model-tool loop lives in package `agent`.
 
 ## License
 

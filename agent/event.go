@@ -36,6 +36,37 @@ type Event struct {
 	StopReason StopReason
 }
 
+// Constructors keep invalid field combinations out of the package: each
+// kind's payload is set by exactly one constructor. Public fields remain
+// available for switch-based rendering.
+func newRunStartEvent() *Event {
+	return &Event{Kind: EventRunStart}
+}
+
+func newModelStartEvent(turn int) *Event {
+	return &Event{Kind: EventModelStart, ModelTurn: turn}
+}
+
+func newModelEvent(turn int, model models.Event) *Event {
+	return &Event{Kind: EventModel, ModelTurn: turn, Model: model}
+}
+
+func newModelEndEvent(turn int, response *models.Response) *Event {
+	return &Event{Kind: EventModelEnd, ModelTurn: turn, Response: response}
+}
+
+func newToolStartEvent(turn, index int, call *models.ToolCall) *Event {
+	return &Event{Kind: EventToolStart, ModelTurn: turn, ToolIndex: index, ToolCall: call}
+}
+
+func newToolEndEvent(turn, index int, call *models.ToolCall, result *ToolResult) *Event {
+	return &Event{Kind: EventToolEnd, ModelTurn: turn, ToolIndex: index, ToolCall: call, ToolResult: result}
+}
+
+func newRunEndEvent(reason StopReason) *Event {
+	return &Event{Kind: EventRunEnd, StopReason: reason}
+}
+
 func (e Event) clone() Event {
 	out := e
 	out.Model = e.Model.Clone()

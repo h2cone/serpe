@@ -2,15 +2,23 @@ package agent
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/h2cone/ouro/core/models"
 )
 
+// This file owns run accounting: the budget counters and limits, the call-ID
+// ledger, and the tool batch under execution. Run policy that consumes these
+// values lives in policy.go; the scheduler lives in stream.go.
+
 // runBudget is the sole owner of counters and limits used by run policy.
+// Counters here are incremented only by the scheduler; decisions derived
+// from them (stop reasons, tool-choice relaxation) live in policy.go.
 type runBudget struct {
 	limits         Limits
 	modelTurns     int
 	toolCalls      int
+	toolBatches    int
 	observedTokens int64
 	tokenOverflow  bool
 	identicalSteps int
@@ -54,6 +62,25 @@ func (b *runBudget) stopBeforeTools(callCount int) StopReason {
 }
 
 func (b *runBudget) recordToolCall() { b.toolCalls++ }
+
+// completedToolBatches reports how many tool batches have finished. The
+// first completed batch relaxes a forced tool choice (policy.resolveToolChoice).
+func (b *runBudget) completedToolBatches() int { return b.toolBatches }
+
+// recordToolBatch records one completed tool batch.
+func (b *runBudget) recordToolBatch() { b.toolBatches++ }
+
+// accumulateObservedTokens is the bounded token accumulator: negative
+// reported values are rejected, and overflow saturates at MaxInt64.
+func accumulateObservedTokens(total, reported int64) (next int64, overflow, ok bool) {
+	if reported < 0 {
+		return total, false, false
+	}
+	if total > math.MaxInt64-reported {
+		return math.MaxInt64, true, true
+	}
+	return total + reported, false, true
+}
 
 func (b *runBudget) recordStep(fingerprint string) bool {
 	if fingerprint == b.lastStep {

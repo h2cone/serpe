@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/h2cone/ouro/core/models"
 )
+
+// This file owns run policy: model terminal classification, tool-choice
+// resolution and validation, and terminal model errors. Budget accounting and
+// counters live in run_state.go; the pull scheduler lives in stream.go and
+// only applies the decisions made here.
 
 type afterModelAction int
 
@@ -21,6 +25,21 @@ type afterModel struct {
 	action    afterModelAction
 	assistant models.Message
 	calls     []models.ToolCall
+}
+
+// decideAfterModel is the single policy entry point for "what does this
+// finished model turn mean": it classifies the response and validates it
+// against the turn's tool choice. The scheduler applies the returned
+// decision without re-deriving policy.
+func decideAfterModel(resp *models.Response, choice models.ToolChoice) (afterModel, error) {
+	classified, err := classifyModelResponse(resp)
+	if err != nil {
+		return afterModel{}, err
+	}
+	if err := validateToolChoice(choice, classified.calls); err != nil {
+		return afterModel{}, err
+	}
+	return classified, nil
 }
 
 // classifyModelResponse accepts only response terminals that are safe either
@@ -154,12 +173,24 @@ func validateToolChoice(choice models.ToolChoice, calls []models.ToolCall) error
 	return nil
 }
 
-func accumulateObservedTokens(total, reported int64) (next int64, overflow, ok bool) {
-	if reported < 0 {
-		return total, false, false
+// resolveToolChoice derives the tool choice for the next model turn. After
+// the first completed tool batch, a forced choice is relaxed to auto so the
+// model may answer directly; a none choice is never overridden.
+func resolveToolChoice(base models.ToolChoice, completedToolBatches int) models.ToolChoice {
+	if completedToolBatches > 0 && base.Kind != models.ToolChoiceNone {
+		return models.ToolChoice{Kind: models.ToolChoiceAuto}
 	}
-	if total > math.MaxInt64-reported {
-		return math.MaxInt64, true, true
+	return base
+}
+
+func candidateZero(resp *models.Response) (models.Candidate, bool) {
+	if resp == nil {
+		return models.Candidate{}, false
 	}
-	return total + reported, false, true
+	for i := range resp.Candidates {
+		if resp.Candidates[i].Index == 0 {
+			return resp.Candidates[i], true
+		}
+	}
+	return models.Candidate{}, false
 }
