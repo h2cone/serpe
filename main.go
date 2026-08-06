@@ -17,6 +17,9 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime)
+	log.SetOutput(os.Stderr)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -25,7 +28,7 @@ func main() {
 		APIKey:   os.Getenv("OPENAI_API_KEY"),
 		BaseURL:  os.Getenv("OPENAI_BASE_URL"),
 	}))
-	model := must(provider.Model("glm-5.2"))
+	model := must(provider.Model(os.Getenv("OPENAI_DEFAULT_MODEL")))
 
 	runner := must(agent.NewRunner(agent.Config{
 		Model: model,
@@ -40,17 +43,38 @@ func main() {
 	stream := must(runner.Stream(ctx, models.NewTextRequest(prompt)))
 	defer stream.Close()
 
+	// model_start: after model.Stream returns (HTTP headers ready).
+	// first_token: first non-empty DisplayText delta.
+	var sawModelStart, sawFirstToken bool
 	for stream.Next() {
-		render(stream.Event())
+		ev := stream.Event()
+		switch ev.Kind {
+		case agent.EventModelStart:
+			if !sawModelStart {
+				log.Print("model_start")
+				sawModelStart = true
+			}
+		case agent.EventModel:
+			if !sawFirstToken && ev.Model.DisplayText() != "" {
+				log.Print("first_token")
+				sawFirstToken = true
+			}
+		case agent.EventToolStart:
+			if ev.ToolCall != nil {
+				log.Printf("tool %s", ev.ToolCall.Name)
+			}
+		}
+		render(ev)
 	}
 	if err := stream.Err(); err != nil {
 		log.Fatal(err)
 	}
+	log.Print("done")
 	result := stream.Result()
 	if result.Completed() {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "stopped: %s\n", result.StopReason)
+	log.Printf("stopped: %s", result.StopReason)
 }
 
 type nowTool struct{}
@@ -67,10 +91,6 @@ func render(ev agent.Event) {
 	switch ev.Kind {
 	case agent.EventModel:
 		fmt.Print(ev.Model.DisplayText())
-	case agent.EventToolStart:
-		if ev.ToolCall != nil {
-			fmt.Fprintf(os.Stderr, "\n[tool %s]\n", ev.ToolCall.Name)
-		}
 	case agent.EventRunEnd:
 		if ev.StopReason == agent.StopCompleted {
 			fmt.Println()
