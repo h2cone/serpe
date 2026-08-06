@@ -27,7 +27,7 @@ func main() {
 	}))
 	model := must(provider.Model("glm-5.2"))
 
-	runner := must(agent.New(agent.Config{
+	runner := must(agent.NewRunner(agent.Config{
 		Model: model,
 		Tools: []agent.Tool{nowTool{}},
 	}))

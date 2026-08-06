@@ -32,7 +32,7 @@ func BenchmarkRunLongTranscript(b *testing.B) {
 	for i := range request.Messages {
 		request.Messages[i] = models.NewUserMessage(models.Text("long transcript message"))
 	}
-	runner, err := agent.New(agent.Config{Model: repeatModel{response: textResponse("done")}})
+	runner, err := agent.NewRunner(agent.Config{Model: repeatModel{response: textResponse("done")}})
 	if err != nil {
 		b.Fatal(err)
 	}

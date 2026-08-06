@@ -37,8 +37,8 @@ type Runner struct {
 	limits Limits
 }
 
-// New validates config and builds a concurrent-safe Runner.
-func New(config Config) (*Runner, error) {
+// NewRunner validates config and builds a concurrent-safe Runner.
+func NewRunner(config Config) (*Runner, error) {
 	if config.Model == nil {
 		return nil, fmt.Errorf("%w: model is required", ErrInvalidConfig)
 	}

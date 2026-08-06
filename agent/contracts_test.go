@@ -22,7 +22,7 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 		{
 			name: "completed",
 			run: func() (*agent.Result, error) {
-				runner, _ := agent.New(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}}})
+				runner, _ := agent.NewRunner(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}}})
 				return runner.Run(context.Background(), userReq("go"))
 			},
 			stop: agent.StopCompleted, completed: true,
@@ -31,7 +31,7 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 			name: "controlled limit",
 			run: func() (*agent.Result, error) {
 				model := &scriptedModel{responses: []*models.Response{toolCallResponse(models.ToolCall{ID: "c", Name: "f", Arguments: json.RawMessage(`{}`)})}}
-				runner, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}, Limits: agent.Limits{MaxModelTurns: 1}})
+				runner, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}, Limits: agent.Limits{MaxModelTurns: 1}})
 				return runner.Run(context.Background(), userReq("go"))
 			},
 			stop: agent.StopMaxModelTurns,
@@ -41,7 +41,7 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 			run: func() (*agent.Result, error) {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
-				runner, _ := agent.New(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("unused")}}})
+				runner, _ := agent.NewRunner(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("unused")}}})
 				return runner.Run(ctx, userReq("go"))
 			},
 			stop: agent.StopCancelled, errIs: context.Canceled,
@@ -49,7 +49,7 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 		{
 			name: "failed",
 			run: func() (*agent.Result, error) {
-				runner, _ := agent.New(agent.Config{Model: nilStreamModel{}})
+				runner, _ := agent.NewRunner(agent.Config{Model: nilStreamModel{}})
 				return runner.Run(context.Background(), userReq("go"))
 			},
 			stop: agent.StopFailed, errIs: agent.ErrInvalidModelResponse,
@@ -86,7 +86,7 @@ func TestAgentStreamTerminalTimingContract(t *testing.T) {
 		{
 			name: "completed run_end precedes exhaustion",
 			newStream: func(t *testing.T) agent.Stream {
-				runner, _ := agent.New(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}}})
+				runner, _ := agent.NewRunner(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}}})
 				stream, err := runner.Stream(context.Background(), userReq("go"))
 				if err != nil {
 					t.Fatal(err)
@@ -98,7 +98,7 @@ func TestAgentStreamTerminalTimingContract(t *testing.T) {
 		{
 			name: "failure has no synthetic run_end",
 			newStream: func(t *testing.T) agent.Stream {
-				runner, _ := agent.New(agent.Config{Model: nilStreamModel{}})
+				runner, _ := agent.NewRunner(agent.Config{Model: nilStreamModel{}})
 				stream, err := runner.Stream(context.Background(), userReq("go"))
 				if err != nil {
 					t.Fatal(err)
@@ -134,7 +134,7 @@ func TestAgentStreamTerminalTimingContract(t *testing.T) {
 
 func TestResultLastResponseIsDerivedFromSteps(t *testing.T) {
 	t.Parallel()
-	runner, _ := agent.New(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("final")}}})
+	runner, _ := agent.NewRunner(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("final")}}})
 	result, err := runner.Run(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)

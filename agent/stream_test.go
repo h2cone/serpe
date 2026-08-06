@@ -19,7 +19,7 @@ func TestStreamEventOrder(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "c1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 		textResponse("final"),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	stream, err := r.Stream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestRunStreamEquivalence(t *testing.T) {
 	newRunner := func() *agent.Runner {
 		// Fresh model each time with same script.
 		m := &scriptedModel{responses: cloneResponses(responses)}
-		r, err := agent.New(agent.Config{Model: m, Tools: []agent.Tool{newStubTool("f", nil)}})
+		r, err := agent.NewRunner(agent.Config{Model: m, Tools: []agent.Tool{newStubTool("f", nil)}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +117,7 @@ func TestEventDefensiveCopy(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "c1", Name: "f", Arguments: json.RawMessage(`{"x":1}`)}),
 		textResponse("done"),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	stream, err := r.Stream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestEventDefensiveCopy(t *testing.T) {
 func TestCloseIdempotent(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("x")}}
-	r, _ := agent.New(agent.Config{Model: model})
+	r, _ := agent.NewRunner(agent.Config{Model: model})
 	stream, err := r.Stream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func (nilStreamModel) Stream(context.Context, *models.Request) (models.Stream, e
 
 func TestNilModelStreamFailsWithoutPanic(t *testing.T) {
 	t.Parallel()
-	r, _ := agent.New(agent.Config{Model: nilStreamModel{}})
+	r, _ := agent.NewRunner(agent.Config{Model: nilStreamModel{}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrInvalidModelResponse) {
 		t.Fatalf("err=%v", err)
@@ -225,7 +225,7 @@ func TestCloseDuringModelStreamAcquisitionClosesReturnedStream(t *testing.T) {
 		release: make(chan struct{}),
 		stream:  returned,
 	}
-	r, _ := agent.New(agent.Config{Model: model})
+	r, _ := agent.NewRunner(agent.Config{Model: model})
 	stream, err := r.Stream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func TestCancelContext(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{
 		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := r.Stream(ctx, userReq("go"))
 	if err != nil {
@@ -314,7 +314,7 @@ func TestModelTurnAndToolIndex(t *testing.T) {
 		),
 		textResponse("ok"),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	stream, err := r.Stream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +348,7 @@ func TestModelTurnAndToolIndex(t *testing.T) {
 func TestNilContextUsesBackground(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("ok")}}
-	r, _ := agent.New(agent.Config{Model: model})
+	r, _ := agent.NewRunner(agent.Config{Model: model})
 	// intentional nil context per API contract
 	result, err := r.Run(nil, userReq("hi")) //nolint:staticcheck
 	if err != nil {

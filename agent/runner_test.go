@@ -36,7 +36,7 @@ func terminalResponse(status models.ResponseStatus, finish models.FinishReason, 
 func TestRunNoToolsCompletes(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("hello")}}
-	r, err := agent.New(agent.Config{Model: model})
+	r, err := agent.NewRunner(agent.Config{Model: model})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestRunSingleToolThenAnswer(t *testing.T) {
 	tool := newStubTool("echo", func(_ context.Context, args json.RawMessage) (agent.ToolResult, error) {
 		return agent.TextResult("echo:" + string(args)), nil
 	})
-	r, err := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, err := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestRunMultiToolsOrder(t *testing.T) {
 		),
 		textResponse("ok"),
 	}}
-	r, err := agent.New(agent.Config{Model: model, Tools: []agent.Tool{makeTool("a"), makeTool("b")}})
+	r, err := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{makeTool("a"), makeTool("b")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestUnknownToolRecoverable(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "1", Name: "missing", Arguments: json.RawMessage(`{}`)}),
 		textResponse("recovered"),
 	}}
-	r, err := agent.New(agent.Config{Model: model})
+	r, err := agent.NewRunner(agent.Config{Model: model})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestRecoverableToolErrorResult(t *testing.T) {
 	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
 		return agent.ErrorResult("bad args"), nil
 	})
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestFatalToolError(t *testing.T) {
 	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
 		return agent.ToolResult{}, errors.New("boom")
 	})
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrToolExecution) {
 		t.Fatalf("err=%v", err)
@@ -190,7 +190,7 @@ func TestFatalToolErrorPreservesEarlierBatchResults(t *testing.T) {
 		}
 		return agent.ToolResult{}, errors.New("second failed")
 	})
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrToolExecution) {
 		t.Fatalf("err=%v", err)
@@ -213,7 +213,7 @@ func TestDuplicateCallID(t *testing.T) {
 		),
 	}}
 	tool := newStubTool("f", nil)
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrInvalidModelResponse) {
 		t.Fatalf("err=%v", err)
@@ -228,7 +228,7 @@ func TestEmptyCallID(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{
 		toolCallResponse(models.ToolCall{ID: "", Name: "f", Arguments: json.RawMessage(`{}`)}),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	_, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrInvalidModelResponse) {
 		t.Fatalf("err=%v", err)
@@ -238,7 +238,7 @@ func TestEmptyCallID(t *testing.T) {
 func TestRequestValidation(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("x")}}
-	r, _ := agent.New(agent.Config{Model: model})
+	r, _ := agent.NewRunner(agent.Config{Model: model})
 
 	if _, err := r.Run(context.Background(), nil); err == nil {
 		t.Fatal("nil request")
@@ -274,7 +274,7 @@ func TestMaxModelTurns(t *testing.T) {
 		atomic.AddInt32(&execs, 1)
 		return agent.TextResult("ok"), nil
 	})
-	r, _ := agent.New(agent.Config{
+	r, _ := agent.NewRunner(agent.Config{
 		Model:  model,
 		Tools:  []agent.Tool{tool},
 		Limits: agent.Limits{MaxModelTurns: 1},
@@ -307,7 +307,7 @@ func TestMaxToolCalls(t *testing.T) {
 		atomic.AddInt32(&execs, 1)
 		return agent.TextResult("ok"), nil
 	})
-	r, _ := agent.New(agent.Config{
+	r, _ := agent.NewRunner(agent.Config{
 		Model:  model,
 		Tools:  []agent.Tool{tool},
 		Limits: agent.Limits{MaxToolCalls: 1},
@@ -334,7 +334,7 @@ func TestMaxObservedTokens(t *testing.T) {
 		atomic.AddInt32(&execs, 1)
 		return agent.TextResult("ok"), nil
 	})
-	r, _ := agent.New(agent.Config{
+	r, _ := agent.NewRunner(agent.Config{
 		Model:  model,
 		Tools:  []agent.Tool{tool},
 		Limits: agent.Limits{MaxObservedTokens: 50},
@@ -356,7 +356,7 @@ func TestMaxObservedTokensFinalAnswerStillCompletes(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{
 		withUsage(textResponse("final"), 100),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Limits: agent.Limits{MaxObservedTokens: 50}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Limits: agent.Limits{MaxObservedTokens: 50}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +381,7 @@ func TestStallDetection(t *testing.T) {
 	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
 		return agent.TextResult("same"), nil
 	})
-	r, _ := agent.New(agent.Config{
+	r, _ := agent.NewRunner(agent.Config{
 		Model:  model,
 		Tools:  []agent.Tool{tool},
 		Limits: agent.Limits{MaxIdenticalSteps: 3},
@@ -407,7 +407,7 @@ func TestStallResetsOnChange(t *testing.T) {
 		v := atomic.AddInt32(&n, 1)
 		return agent.TextResult(string(rune('a' + v - 1))), nil
 	})
-	r, _ := agent.New(agent.Config{
+	r, _ := agent.NewRunner(agent.Config{
 		Model:  model,
 		Tools:  []agent.Tool{tool},
 		Limits: agent.Limits{MaxIdenticalSteps: 2},
@@ -427,7 +427,7 @@ func TestToolChoiceRelaxation(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 		textResponse("done"),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	req := userReq("go")
 	req.ToolChoice = models.ToolChoice{Kind: models.ToolChoiceRequired}
 	if _, err := r.Run(context.Background(), req); err != nil {
@@ -447,7 +447,7 @@ func TestToolChoiceNonePreserved(t *testing.T) {
 	t.Parallel()
 	// With none, model just answers; no tools used.
 	model := &scriptedModel{responses: []*models.Response{textResponse("hi")}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	req := userReq("go")
 	req.ToolChoice = models.ToolChoice{Kind: models.ToolChoiceNone}
 	if _, err := r.Run(context.Background(), req); err != nil {
@@ -465,7 +465,7 @@ func TestProviderStatePreserved(t *testing.T) {
 		withState(toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}), state),
 		textResponse("done"),
 	}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -479,7 +479,7 @@ func TestProviderStatePreserved(t *testing.T) {
 func TestInputDeepCopy(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("ok")}}
-	r, _ := agent.New(agent.Config{Model: model})
+	r, _ := agent.NewRunner(agent.Config{Model: model})
 	req := userReq("seed")
 	result, err := r.Run(context.Background(), req)
 	if err != nil {
@@ -505,7 +505,7 @@ func TestRefusalAndReasoning(t *testing.T) {
 		}},
 	}
 	model := &scriptedModel{responses: []*models.Response{resp}}
-	r, _ := agent.New(agent.Config{Model: model})
+	r, _ := agent.NewRunner(agent.Config{Model: model})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
@@ -562,7 +562,7 @@ func TestModelTerminalClassification(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			model := &scriptedModel{responses: []*models.Response{tt.response}}
-			r, _ := agent.New(agent.Config{Model: model})
+			r, _ := agent.NewRunner(agent.Config{Model: model})
 			result, err := r.Run(context.Background(), userReq("go"))
 			if err == nil || !errors.Is(err, agent.ErrModelResponse) {
 				t.Fatalf("err=%v", err)
@@ -592,7 +592,7 @@ func TestCompletedRefusalIsAValidFinalAnswer(t *testing.T) {
 	}
 	for i, response := range tests {
 		model := &scriptedModel{responses: []*models.Response{response}}
-		r, _ := agent.New(agent.Config{Model: model})
+		r, _ := agent.NewRunner(agent.Config{Model: model})
 		result, err := r.Run(context.Background(), userReq("go"))
 		if err != nil || !result.Completed() {
 			t.Fatalf("case %d: err=%v result=%+v", i, err, result)
@@ -611,7 +611,7 @@ func TestNonSuccessToolResponseDoesNotExecute(t *testing.T) {
 		return agent.TextResult("unexpected"), nil
 	})
 	model := &scriptedModel{responses: []*models.Response{response}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrModelResponse) {
 		t.Fatalf("err=%v", err)
@@ -629,7 +629,7 @@ func TestResponseFinishMustMatchToolCalls(t *testing.T) {
 	}
 	for i, response := range tests {
 		model := &scriptedModel{responses: []*models.Response{response}}
-		r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+		r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 		result, err := r.Run(context.Background(), userReq("go"))
 		if err == nil || !errors.Is(err, agent.ErrInvalidModelResponse) {
 			t.Fatalf("case %d: err=%v", i, err)
@@ -674,7 +674,7 @@ func TestToolChoiceResponseIsEnforcedBeforeExecution(t *testing.T) {
 				})
 			}
 			model := &scriptedModel{responses: []*models.Response{tt.response}}
-			r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{makeTool("a"), makeTool("b")}})
+			r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{makeTool("a"), makeTool("b")}})
 			req := userReq("go")
 			req.ToolChoice = tt.choice
 			result, err := r.Run(context.Background(), req)
@@ -693,7 +693,7 @@ func TestObservedTokenAccountingRejectsNegativeAndSaturatesOverflow(t *testing.T
 	t.Run("negative", func(t *testing.T) {
 		response := withUsage(textResponse("bad usage"), -1)
 		model := &scriptedModel{responses: []*models.Response{response}}
-		r, _ := agent.New(agent.Config{Model: model})
+		r, _ := agent.NewRunner(agent.Config{Model: model})
 		result, err := r.Run(context.Background(), userReq("go"))
 		if err == nil || !errors.Is(err, agent.ErrInvalidModelResponse) {
 			t.Fatalf("err=%v", err)
@@ -712,7 +712,7 @@ func TestObservedTokenAccountingRejectsNegativeAndSaturatesOverflow(t *testing.T
 			atomic.AddInt32(&executions, 1)
 			return agent.TextResult("ok"), nil
 		})
-		r, _ := agent.New(agent.Config{
+		r, _ := agent.NewRunner(agent.Config{
 			Model: model, Tools: []agent.Tool{tool}, Limits: agent.Limits{MaxObservedTokens: math.MaxInt64},
 		})
 		result, err := r.Run(context.Background(), userReq("go"))
@@ -739,7 +739,7 @@ func TestConcurrentRuns(t *testing.T) {
 		atomic.AddInt32(&toolCalls, 1)
 		return agent.TextResult("x"), nil
 	})
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -762,7 +762,7 @@ func TestInvalidToolResultEmpty(t *testing.T) {
 	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
 		return agent.ToolResult{}, nil
 	})
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{tool}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	_, err := r.Run(context.Background(), userReq("go"))
 	if err == nil || !errors.Is(err, agent.ErrToolExecution) {
 		t.Fatalf("err=%v", err)
@@ -772,7 +772,7 @@ func TestInvalidToolResultEmpty(t *testing.T) {
 func TestSpecificToolChoiceMustExist(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("x")}}
-	r, _ := agent.New(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
+	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
 	req := userReq("go")
 	req.ToolChoice = models.SpecificTool("missing")
 	if _, err := r.Run(context.Background(), req); err == nil {

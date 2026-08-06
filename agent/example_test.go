@@ -20,7 +20,7 @@ func ExampleRunner() {
 	now := newStubTool("now", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
 		return agent.TextResult("2026-08-04T12:00:00Z"), nil
 	})
-	runner, err := agent.New(agent.Config{Model: model, Tools: []agent.Tool{now}})
+	runner, err := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{now}})
 	if err != nil {
 		panic(err)
 	}

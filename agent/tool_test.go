@@ -37,27 +37,27 @@ func TestNewConfigValidation(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{}
 
-	if _, err := agent.New(agent.Config{}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
+	if _, err := agent.NewRunner(agent.Config{}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
 		t.Fatalf("nil model: %v", err)
 	}
-	if _, err := agent.New(agent.Config{Model: model, Tools: []agent.Tool{nil}}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
+	if _, err := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{nil}}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
 		t.Fatalf("nil tool: %v", err)
 	}
 	bad := newStubTool("x", nil)
 	bad.def = models.Tool{Name: ""}
-	if _, err := agent.New(agent.Config{Model: model, Tools: []agent.Tool{bad}}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
+	if _, err := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{bad}}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
 		t.Fatalf("invalid definition: %v", err)
 	}
-	if _, err := agent.New(agent.Config{
+	if _, err := agent.NewRunner(agent.Config{
 		Model: model,
 		Tools: []agent.Tool{newStubTool("a", nil), newStubTool("a", nil)},
 	}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
 		t.Fatalf("duplicate name: %v", err)
 	}
-	if _, err := agent.New(agent.Config{Model: model, Limits: agent.Limits{MaxModelTurns: -1}}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
+	if _, err := agent.NewRunner(agent.Config{Model: model, Limits: agent.Limits{MaxModelTurns: -1}}); err == nil || !errors.Is(err, agent.ErrInvalidConfig) {
 		t.Fatalf("negative limits: %v", err)
 	}
-	r, err := agent.New(agent.Config{Model: model})
+	r, err := agent.NewRunner(agent.Config{Model: model})
 	if err != nil {
 		t.Fatalf("empty tools: %v", err)
 	}
