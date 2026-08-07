@@ -38,6 +38,53 @@ func runStoreContract(t *testing.T, newStore storeFactory) {
 	t.Run("context_canceled", func(t *testing.T) { contractContextCanceled(t, newStore(t)) })
 	t.Run("invalid_id_load", func(t *testing.T) { contractInvalidID(t, newStore(t)) })
 	t.Run("concurrent_create", func(t *testing.T) { contractConcurrentCreate(t, newStore(t)) })
+	t.Run("list", func(t *testing.T) { contractList(t, newStore(t)) })
+}
+
+func contractList(t *testing.T, store Store) {
+	t.Helper()
+	ctx := context.Background()
+	empty, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List empty: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("List empty len=%d, want 0", len(empty))
+	}
+	if err := store.Create(ctx, New("a", "/wd")); err != nil {
+		t.Fatalf("Create a: %v", err)
+	}
+	if err := store.Create(ctx, New("b", "/wd")); err != nil {
+		t.Fatalf("Create b: %v", err)
+	}
+	got, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List len=%d, want 2", len(got))
+	}
+	ids := map[string]bool{}
+	for _, s := range got {
+		ids[s.ID] = true
+		// Ownership: mutate returned snapshot must not affect store.
+		s.CWD = "/mutated"
+	}
+	if !ids["a"] || !ids["b"] {
+		t.Fatalf("List ids=%v, want a and b", ids)
+	}
+	loaded, err := store.Load(ctx, "a")
+	if err != nil {
+		t.Fatalf("Load after List mutate: %v", err)
+	}
+	if loaded.CWD != "/wd" {
+		t.Fatalf("store polluted after List mutate: CWD=%q", loaded.CWD)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := store.List(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("List canceled = %v, want context.Canceled", err)
+	}
 }
 
 func contractLifecycle(t *testing.T, store Store) {

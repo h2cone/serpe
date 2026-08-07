@@ -123,6 +123,27 @@ func (m *Manager) Get(ctx context.Context, id string) (*Session, error) {
 	return got, nil
 }
 
+// List returns independent snapshots of every stored session. Order is
+// undefined; the store is not required to sort. Invalid stored rows are
+// skipped so a single corrupt record cannot break the whole listing.
+func (m *Manager) List(ctx context.Context) ([]*Session, error) {
+	all, err := m.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Session, 0, len(all))
+	for _, s := range all {
+		if s == nil {
+			continue
+		}
+		if err := s.Validate(); err != nil {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // Fork deep-copies the source's CWD, Messages, and Metadata into a new
 // session with the given ID, ParentID set to the source ID, and fresh
 // creation/update timestamps. It creates nothing when source and new ID are

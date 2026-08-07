@@ -7,28 +7,31 @@ continue until done. Provider specifics stay behind a `models.Model` seam.
 ## Dependency graph
 
 ```
-                      main.go
-                         │
-              ┌──────────┴───────────────┐
-              │          │               │
+                      main.go          cmd/ouroserve
+                         │                   │
+              ┌──────────┴───────────────┐   │
+              │          │               │   ▼
               agent ──► core/models ◄─── core/providers
-              │         │     ▲          │
-              │         │     │          │
-              │         │core/sessions   │
-              │         │                │
-              ▼         ▼                │
+              │         │     ▲          │   │
+              │         │     │          │   ▼
+              │         │core/sessions   │ server ──► compose
+              │         │                │   │           │
+              ▼         ▼                │   └───────────┘
              internal/jsonvalue ◄────────┘
               ▲
               │
            compose ──► agent
               │
               └──► core/sessions
+
+  ui/ (React Router 7) ──HTTP/SSE──► server/
 ```
 
 `agent` never imports `core/sessions` or `core/providers`. `compose` is the
 application seam that joins `agent.Runner` with `sessions.Manager` for a
-single turn boundary. `internal/jsonvalue` is a leaf shared by `core/models`,
-`agent`, and the providers' `internal/shared`.
+single turn boundary. `server` exposes REST + SSE over `compose`/`sessions`.
+`internal/jsonvalue` is a leaf shared by `core/models`, `agent`, and the
+providers' `internal/shared`.
 
 ## Modules
 
@@ -78,8 +81,9 @@ core/sessions ──► core/models
 ├─ Session
 ├─ Store ◄── MemoryStore
 │         ◄── FileStore   (disk: <root>/<id>.json, temp+rename)
-└─ Manager: Create · Get · Fork · Update · Append · Delete
+└─ Manager: Create · Get · List · Fork · Update · Append · AppendAt · Delete
 ```
+
 
 Minimal use (in-process):
 
@@ -122,6 +126,23 @@ result, committed, err := svc.Send(ctx, "sess-1", "What is in this repo?")
 // or: turn, _ := svc.Stream(ctx, "sess-1", prompt); for turn.Next() { ... }
 ```
 
+### `server` + `cmd/ouroserve`
+
+```
+server ──► compose · agent · core/sessions · core/models
+  GET  /api/health
+  CRUD /api/sessions[/{id}[/fork]]
+  POST /api/runs  → text/event-stream (TurnService.Stream)
+```
+
+```bash
+# API (default MemoryStore; set OURO_SESSIONS_DIR for FileStore)
+go run ./cmd/ouroserve   # :8080
+
+# UI (dev; proxies /api → :8080)
+cd ui && npm install && npm run dev
+```
+
 ### `main.go`
 
 ```
@@ -130,9 +151,7 @@ main.go ─┬─► agent
          └─► core/providers
 ```
 
-Wiring and rendering only; the model-tool loop lives in package `agent`.
-Stateful multi-turn CLI can wire `FileStore` + `compose.TurnService` the same
-way a future HTTP server will.
+CLI wiring and rendering only; the model-tool loop lives in package `agent`.
 
 ## License
 

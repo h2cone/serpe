@@ -128,6 +128,41 @@ func (s *FileStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// List returns independent snapshots of every stored session. See Store.List.
+// Orphan .tmp files are ignored. Order is undefined.
+func (s *FileStore) List(ctx context.Context) ([]*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Session, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".json")
+		if !validID(id) {
+			continue
+		}
+		got, err := s.Load(ctx, id)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, got)
+	}
+	return out, nil
+}
+
 func (s *FileStore) path(id string) string {
 	return filepath.Join(s.root, id+".json")
 }

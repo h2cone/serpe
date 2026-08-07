@@ -21,4 +21,7 @@ type Store interface {
 	// Delete removes the session, failing with ErrNotFound if the ID does not
 	// exist.
 	Delete(ctx context.Context, id string) error
+	// List returns independent snapshots of every stored session. Order is
+	// undefined; callers that need a stable order must sort themselves.
+	List(ctx context.Context) ([]*Session, error)
 }

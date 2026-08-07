@@ -764,6 +764,17 @@ func (s *noCloneStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (s *noCloneStore) List(ctx context.Context) ([]*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]*Session, 0, len(s.saved))
+	for _, got := range s.saved {
+		out = append(out, got)
+	}
+	return out, nil
+}
+
 // TestManagerClonesAtWriteBoundary verifies the Manager clones caller input at
 // its write boundary (Create) and deep-copies the source transcript into a
 // forked child rather than aliasing it, using a store that does not clone.

@@ -86,3 +86,17 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 	delete(s.saved, id)
 	return nil
 }
+
+// List returns independent snapshots of every stored session. See Store.List.
+func (s *MemoryStore) List(ctx context.Context) ([]*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Session, 0, len(s.saved))
+	for _, got := range s.saved {
+		out = append(out, got.Clone())
+	}
+	return out, nil
+}
