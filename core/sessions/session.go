@@ -3,6 +3,7 @@ package sessions
 import (
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/h2cone/ouro/core/models"
 )
@@ -16,6 +17,11 @@ import (
 // rounds; Metadata is the only lightweight extension point for string
 // attributes such as title, owner, or tenant. It must not carry credentials,
 // large objects, or provider-private state.
+//
+// Session IDs (and metadata keys) use one portable alphabet shared by every
+// Store backend: [A-Za-z0-9._-], length 1–128, not "."/"..", and not Windows
+// reserved device names. MemoryStore and FileStore therefore accept the same
+// IDs — no store-specific ID rules leak into callers.
 type Session struct {
 	ID        string
 	ParentID  string
@@ -91,8 +97,39 @@ func (s *Session) Clone() *Session {
 	return out
 }
 
-// validID reports a non-empty ID without leading or trailing whitespace. The
-// package does not otherwise constrain ID formats.
+// validID reports whether id is a portable session identifier. The same rule
+// applies to every Store backend and to metadata keys.
 func validID(id string) bool {
-	return id != "" && strings.TrimSpace(id) == id
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	if len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if r > unicode.MaxASCII || !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return !isWindowsReservedName(id)
+}
+
+// isWindowsReservedName reports CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9
+// (case-insensitive), including extension variants such as CON.txt.
+func isWindowsReservedName(id string) bool {
+	base := id
+	if i := strings.IndexByte(id, '.'); i >= 0 {
+		base = id[:i]
+	}
+	switch strings.ToUpper(base) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
 }

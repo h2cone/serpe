@@ -81,7 +81,7 @@ func (r *runRecord) lastResponse() *models.Response {
 	return r.steps[len(r.steps)-1].Response
 }
 
-func (r *runRecord) appendToolResult(content models.Content) {
+func (r *runRecord) appendToolOutput(content models.Content) {
 	if len(r.steps) == 0 {
 		return
 	}

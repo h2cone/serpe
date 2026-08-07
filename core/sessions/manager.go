@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -173,13 +174,46 @@ func (m *Manager) Fork(ctx context.Context, sourceID, newID string) (*Session, e
 // being a value no real creation timestamp uses.
 var immutableCreatedAt = time.Unix(0, 0).UTC()
 
-// Update is the controlled extension point: it loads a snapshot, deep-copies
-// it, runs the mutator on the private copy, re-validates, saves, and returns
-// the new independent snapshot. The mutator pointer is valid only for the
-// duration of the call. A mutator may only append to Messages and modify CWD
-// and Metadata; ID, ParentID, and CreatedAt are immutable, existing messages
-// must remain an unchanged prefix, and UpdatedAt assignments are ignored and
-// replaced with a non-decreasing UTC time by the Manager.
+// SetCWD updates the session working directory. Prefer this over Update when
+// only CWD changes.
+func (m *Manager) SetCWD(ctx context.Context, id, cwd string) (*Session, error) {
+	if strings.TrimSpace(cwd) == "" {
+		return nil, invalidf("set cwd: CWD is required")
+	}
+	return m.apply(ctx, id, func(s *Session) error {
+		s.CWD = cwd
+		return nil
+	}, false)
+}
+
+// SetMetadata replaces the session metadata map. A nil map clears metadata.
+// Keys must satisfy the portable ID alphabet. Prefer this over Update when
+// only metadata changes.
+func (m *Manager) SetMetadata(ctx context.Context, id string, metadata map[string]string) (*Session, error) {
+	return m.apply(ctx, id, func(s *Session) error {
+		if metadata == nil {
+			s.Metadata = nil
+			return nil
+		}
+		s.Metadata = make(map[string]string, len(metadata))
+		for k, v := range metadata {
+			s.Metadata[k] = v
+		}
+		return nil
+	}, false)
+}
+
+// Update is a low-level extension point for rare multi-field edits. Prefer
+// Append, AppendAt, SetCWD, and SetMetadata — those APIs cannot violate
+// transcript prefix immutability or ID/ParentID/CreatedAt invariants.
+//
+// Update loads a snapshot, deep-copies it, runs the mutator on the private
+// copy, re-validates, saves, and returns the new independent snapshot. The
+// mutator pointer is valid only for the duration of the call. A mutator may
+// only append to Messages and modify CWD and Metadata; ID, ParentID, and
+// CreatedAt are immutable, existing messages must remain an unchanged prefix,
+// and UpdatedAt assignments are ignored and replaced with a non-decreasing UTC
+// time by the Manager.
 //
 // The per-session write lease is held for the whole mutator, so the mutator
 // must not re-enter the Manager (Append, Update, Fork, or Delete) for the same
@@ -250,6 +284,32 @@ func (m *Manager) Append(ctx context.Context, id string, messages ...models.Mess
 		return nil, invalidf("append: at least one message is required")
 	}
 	return m.apply(ctx, id, func(s *Session) error {
+		for i := range messages {
+			if err := messages[i].Validate(); err != nil {
+				return invalidf("append message %d: %v", i, err)
+			}
+			s.Messages = append(s.Messages, messages[i].Clone())
+		}
+		return nil
+	}, false)
+}
+
+// AppendAt commits messages only when len(transcript) equals at (optimistic
+// CAS-append). When the length has changed, it returns ErrConflict and leaves
+// the stored transcript unchanged. An empty batch or negative at is rejected
+// with ErrInvalidSession. Like Append, it skips the existing-transcript
+// prefix scan because the mutator only appends.
+func (m *Manager) AppendAt(ctx context.Context, id string, at int, messages ...models.Message) (*Session, error) {
+	if len(messages) == 0 {
+		return nil, invalidf("append: at least one message is required")
+	}
+	if at < 0 {
+		return nil, invalidf("append: negative expected length %d", at)
+	}
+	return m.apply(ctx, id, func(s *Session) error {
+		if len(s.Messages) != at {
+			return ErrConflict
+		}
 		for i := range messages {
 			if err := messages[i].Validate(); err != nil {
 				return invalidf("append message %d: %v", i, err)

@@ -60,6 +60,11 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64) (*mod
 					candidate.Content = append(candidate.Content, models.ReasoningSummary(summary.Text))
 				}
 			}
+			for _, part := range item.Content {
+				if part.Type == "reasoning_text" || part.Type == "text" {
+					candidate.Content = append(candidate.Content, models.ReasoningSummary(part.Text))
+				}
+			}
 			hasState = true
 		}
 	}

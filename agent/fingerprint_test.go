@@ -26,7 +26,7 @@ func TestStepFingerprintIgnoresCallID(t *testing.T) {
 	t.Parallel()
 	calls1 := []models.ToolCall{{ID: "1", Name: "now", Arguments: json.RawMessage(`{"x":1}`)}}
 	calls2 := []models.ToolCall{{ID: "2", Name: "now", Arguments: json.RawMessage(`{"x":1}`)}}
-	results := []ToolResult{TextResult("ok")}
+	results := []ToolOutput{TextResult("ok")}
 	fp1, err := stepFingerprint(calls1, results)
 	if err != nil {
 		t.Fatal(err)
@@ -43,8 +43,8 @@ func TestStepFingerprintIgnoresCallID(t *testing.T) {
 func TestStepFingerprintResultChange(t *testing.T) {
 	t.Parallel()
 	calls := []models.ToolCall{{ID: "1", Name: "now", Arguments: json.RawMessage(`{}`)}}
-	fp1, _ := stepFingerprint(calls, []ToolResult{TextResult("a")})
-	fp2, _ := stepFingerprint(calls, []ToolResult{TextResult("b")})
+	fp1, _ := stepFingerprint(calls, []ToolOutput{TextResult("a")})
+	fp2, _ := stepFingerprint(calls, []ToolOutput{TextResult("b")})
 	if fp1 == fp2 {
 		t.Fatal("result change should change fingerprint")
 	}
@@ -60,7 +60,7 @@ func TestStepFingerprintMultiCallOrder(t *testing.T) {
 		{ID: "1", Name: "b", Arguments: json.RawMessage(`{}`)},
 		{ID: "2", Name: "a", Arguments: json.RawMessage(`{}`)},
 	}
-	results := []ToolResult{TextResult("x"), TextResult("x")}
+	results := []ToolOutput{TextResult("x"), TextResult("x")}
 	fp1, _ := stepFingerprint(a, results)
 	fp2, _ := stepFingerprint(b, results)
 	if fp1 == fp2 {
@@ -144,7 +144,7 @@ func TestStepFingerprintRejectsInvalidArgumentsAndShape(t *testing.T) {
 	t.Parallel()
 	if _, err := stepFingerprint(
 		[]models.ToolCall{{ID: "1", Name: "f", Arguments: json.RawMessage(`[]`)}},
-		[]ToolResult{TextResult("ok")},
+		[]ToolOutput{TextResult("ok")},
 	); err == nil {
 		t.Fatal("non-object arguments must fail")
 	}

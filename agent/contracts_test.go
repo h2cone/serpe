@@ -112,8 +112,8 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 				model := &scriptedModel{responses: []*models.Response{
 					toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 				}}
-				tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
-					return agent.ToolResult{}, errors.New("boom")
+				tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
+					return agent.ToolOutput{}, errors.New("boom")
 				})
 				runner, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 				return runner.Run(context.Background(), userReq("go"))
@@ -293,31 +293,31 @@ func TestEventPayloadContract(t *testing.T) {
 		seen[ev.Kind] = true
 		switch ev.Kind {
 		case agent.EventRunStart:
-			if ev.ModelTurn != 0 || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolCall != nil || ev.ToolResult != nil || ev.StopReason != "" {
+			if ev.ModelTurn != 0 || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolCall != nil || ev.ToolOutput != nil || ev.StopReason != "" {
 				t.Fatalf("run_start payload: %+v", ev)
 			}
 		case agent.EventModelStart:
-			if ev.ModelTurn == 0 || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolCall != nil || ev.ToolResult != nil || ev.StopReason != "" {
+			if ev.ModelTurn == 0 || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolCall != nil || ev.ToolOutput != nil || ev.StopReason != "" {
 				t.Fatalf("model_start payload: %+v", ev)
 			}
 		case agent.EventModel:
-			if ev.ModelTurn == 0 || ev.Model.Kind == "" || ev.ToolIndex != 0 || ev.Response != nil || ev.ToolCall != nil || ev.ToolResult != nil || ev.StopReason != "" {
+			if ev.ModelTurn == 0 || ev.Model.Kind == "" || ev.ToolIndex != 0 || ev.Response != nil || ev.ToolCall != nil || ev.ToolOutput != nil || ev.StopReason != "" {
 				t.Fatalf("model_event payload: %+v", ev)
 			}
 		case agent.EventModelEnd:
-			if ev.ModelTurn == 0 || ev.Response == nil || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.ToolCall != nil || ev.ToolResult != nil || ev.StopReason != "" {
+			if ev.ModelTurn == 0 || ev.Response == nil || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.ToolCall != nil || ev.ToolOutput != nil || ev.StopReason != "" {
 				t.Fatalf("model_end payload: %+v", ev)
 			}
 		case agent.EventToolStart:
-			if ev.ModelTurn == 0 || ev.ToolCall == nil || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolResult != nil || ev.StopReason != "" {
+			if ev.ModelTurn == 0 || ev.ToolCall == nil || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolOutput != nil || ev.StopReason != "" {
 				t.Fatalf("tool_start payload: %+v", ev)
 			}
 		case agent.EventToolEnd:
-			if ev.ModelTurn == 0 || ev.ToolCall == nil || ev.ToolResult == nil || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.StopReason != "" {
+			if ev.ModelTurn == 0 || ev.ToolCall == nil || ev.ToolOutput == nil || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.StopReason != "" {
 				t.Fatalf("tool_end payload: %+v", ev)
 			}
 		case agent.EventRunEnd:
-			if ev.StopReason == "" || ev.ModelTurn != 0 || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolCall != nil || ev.ToolResult != nil {
+			if ev.StopReason == "" || ev.ModelTurn != 0 || ev.ToolIndex != 0 || ev.Model.Kind != "" || ev.Response != nil || ev.ToolCall != nil || ev.ToolOutput != nil {
 				t.Fatalf("run_end payload: %+v", ev)
 			}
 		default:

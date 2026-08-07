@@ -68,7 +68,7 @@ type runStream struct {
 	budget       runBudget
 	ledger       callLedger
 	// current is the event most recently produced by step. Its pointer
-	// payloads (Response, ToolCall, ToolResult) are borrowed from the run
+	// payloads (Response, ToolCall, ToolOutput) are borrowed from the run
 	// record or from stack locals that escape to the heap; they are detached
 	// from mutable state only when Event returns a defensive clone. Readers
 	// must go through Event rather than reading current directly.
@@ -384,7 +384,7 @@ func (s *runStream) executeTool() (*Event, bool, error) {
 
 	s.mu.Lock()
 	s.batch.append(result, content)
-	s.record.appendToolResult(content)
+	s.record.appendToolOutput(content)
 	s.budget.recordToolCall()
 	// More tools remain → tool_start; otherwise finish batch.
 	if _, more := s.batch.current(); more {
@@ -397,7 +397,7 @@ func (s *runStream) executeTool() (*Event, bool, error) {
 	return newToolEndEvent(turn, idx, &call, &result), false, nil
 }
 
-func (s *runStream) invokeTool(call models.ToolCall) (ToolResult, models.Content, error) {
+func (s *runStream) invokeTool(call models.ToolCall) (ToolOutput, models.Content, error) {
 	reg, ok := s.runner.tools.lookup(call.Name)
 	if !ok {
 		result := ErrorResult(fmt.Sprintf("unknown tool %q", call.Name))
@@ -408,15 +408,15 @@ func (s *runStream) invokeTool(call models.ToolCall) (ToolResult, models.Content
 	result, err := reg.tool.Execute(s.ctx, args)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return ToolResult{}, models.Content{}, err
+			return ToolOutput{}, models.Content{}, err
 		}
-		return ToolResult{}, models.Content{}, fmt.Errorf("%w: tool %q turn %d index %d: %v",
+		return ToolOutput{}, models.Content{}, fmt.Errorf("%w: tool %q turn %d index %d: %v",
 			ErrToolExecution, call.Name, s.budget.modelTurns, s.batch.index, err)
 	}
 	result = result.clone()
 	content, err := normalizeToolOutput(call, result)
 	if err != nil {
-		return ToolResult{}, models.Content{}, fmt.Errorf("%w: tool %q turn %d index %d: %v",
+		return ToolOutput{}, models.Content{}, fmt.Errorf("%w: tool %q turn %d index %d: %v",
 			ErrToolExecution, call.Name, s.budget.modelTurns, s.batch.index, err)
 	}
 	return result, content, nil

@@ -1,6 +1,11 @@
 // Package models defines provider-independent requests, responses, streaming
 // events, and model invocation interfaces.
 //
+// Content is a closed tagged union. EncodeContent / DecodeContent (and
+// MarshalContent / UnmarshalContent) are the single authority for content-kind
+// serialization; persistence and interop layers should call them instead of
+// re-enumerating kinds.
+//
 // A Request and all memory reachable from it belong to the caller until an
 // invocation starts. Once Complete or Stream is called, the caller must not
 // modify the request or its backing slices until the invocation has returned

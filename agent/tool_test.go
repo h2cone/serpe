@@ -13,10 +13,10 @@ import (
 type stubTool struct {
 	name string
 	def  models.Tool
-	fn   func(ctx context.Context, arguments json.RawMessage) (agent.ToolResult, error)
+	fn   func(ctx context.Context, arguments json.RawMessage) (agent.ToolOutput, error)
 }
 
-func newStubTool(name string, fn func(ctx context.Context, arguments json.RawMessage) (agent.ToolResult, error)) *stubTool {
+func newStubTool(name string, fn func(ctx context.Context, arguments json.RawMessage) (agent.ToolOutput, error)) *stubTool {
 	return &stubTool{
 		name: name,
 		def:  models.NewTool(name, name+" tool", json.RawMessage(`{"type":"object","properties":{}}`)),
@@ -26,7 +26,7 @@ func newStubTool(name string, fn func(ctx context.Context, arguments json.RawMes
 
 func (t *stubTool) Definition() models.Tool { return t.def }
 
-func (t *stubTool) Execute(ctx context.Context, arguments json.RawMessage) (agent.ToolResult, error) {
+func (t *stubTool) Execute(ctx context.Context, arguments json.RawMessage) (agent.ToolOutput, error) {
 	if t.fn == nil {
 		return agent.TextResult("ok"), nil
 	}

@@ -93,6 +93,11 @@ type reasoningItemWire struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"summary"`
+	// Content holds optional reasoning_text parts (e.g. GPT-OSS models).
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
 }
 
 type streamEventWire struct {

@@ -39,6 +39,9 @@ func TestValidateErrors(t *testing.T) {
 		{"updated before created", &Session{ID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now.Add(-time.Hour)}},
 		{"invalid message role", &Session{ID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now, Messages: []models.Message{{Role: "bogus"}}}},
 		{"blank metadata key", &Session{ID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now, Metadata: map[string]string{" k": "v"}}},
+		{"path separator ID", &Session{ID: "a/b", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
+		{"windows reserved ID", &Session{ID: "CON", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
+		{"space in ID", &Session{ID: "has space", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

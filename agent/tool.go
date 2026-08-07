@@ -12,27 +12,29 @@ import (
 // Implementations must be safe for concurrent use.
 type Tool interface {
 	Definition() models.Tool
-	Execute(ctx context.Context, arguments json.RawMessage) (ToolResult, error)
+	Execute(ctx context.Context, arguments json.RawMessage) (ToolOutput, error)
 }
 
-// ToolResult is safe content returned to the model.
-type ToolResult struct {
+// ToolOutput is the safe payload returned by Tool.Execute for the model.
+// Named distinctly from models.ToolResult (a transcript content variant) so
+// the two abstractions do not share a name.
+type ToolOutput struct {
 	Content []models.Content
 	IsError bool
 }
 
-// TextResult returns a successful text tool result.
-func TextResult(text string) ToolResult {
-	return ToolResult{Content: []models.Content{models.Text(text)}}
+// TextResult returns a successful text tool output.
+func TextResult(text string) ToolOutput {
+	return ToolOutput{Content: []models.Content{models.Text(text)}}
 }
 
 // ErrorResult returns a model-recoverable tool failure.
-func ErrorResult(text string) ToolResult {
-	return ToolResult{Content: []models.Content{models.Text(text)}, IsError: true}
+func ErrorResult(text string) ToolOutput {
+	return ToolOutput{Content: []models.Content{models.Text(text)}, IsError: true}
 }
 
-func (r ToolResult) clone() ToolResult {
-	return ToolResult{Content: cloneResultContent(r.Content), IsError: r.IsError}
+func (r ToolOutput) clone() ToolOutput {
+	return ToolOutput{Content: cloneResultContent(r.Content), IsError: r.IsError}
 }
 
 func cloneResultContent(in []models.Content) []models.Content {
@@ -102,7 +104,7 @@ func (ts toolSet) lookup(name string) (registeredTool, bool) {
 	return ts.ordered[index], true
 }
 
-func normalizeToolOutput(call models.ToolCall, out ToolResult) (models.Content, error) {
+func normalizeToolOutput(call models.ToolCall, out ToolOutput) (models.Content, error) {
 	content := models.ToolResultContent(call.ID, call.Name, out.IsError, out.Content...)
 	if err := content.Validate(); err != nil {
 		return models.Content{}, err

@@ -140,6 +140,13 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			if part.Refusal != "" {
 				s.delta(key, models.Delta{Kind: models.DeltaRefusal, Text: part.Refusal}, event.ItemID, "", eventID)
 			}
+		case "reasoning_text":
+			// Visible reasoning text (e.g. GPT-OSS), normalized like other
+			// providers' displayable reasoning.
+			s.startPart(key, models.ReasoningSummary(""), event.ItemID, "", eventID)
+			if part.Text != "" {
+				s.delta(key, models.Delta{Kind: models.DeltaReasoningSummary, Text: part.Text}, event.ItemID, "", eventID)
+			}
 		}
 	case "response.content_part.done":
 		var part contentPartWire
@@ -152,6 +159,8 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			return s.finishValuePart(key, models.Text(""), models.DeltaText, &part.Text, event.ItemID, eventID)
 		case "refusal":
 			return s.finishValuePart(key, models.Refusal(""), models.DeltaRefusal, &part.Refusal, event.ItemID, eventID)
+		case "reasoning_text":
+			return s.finishValuePart(key, models.ReasoningSummary(""), models.DeltaReasoningSummary, &part.Text, event.ItemID, eventID)
 		}
 	case "response.output_text.delta":
 		key := responsePartKey{kind: "output_text", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
@@ -187,6 +196,14 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			s.startPart(key, models.ReasoningSummary(""), event.ItemID, "", eventID)
 		}
 		s.delta(key, models.Delta{Kind: models.DeltaReasoningSummary, Text: event.Delta}, event.ItemID, "", eventID)
+	case "response.reasoning_text.delta":
+		// Full reasoning text (distinct from short summary); map to the same
+		// displayable reasoning channel used by Anthropic/Google thought parts.
+		key := responsePartKey{kind: "reasoning_text", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
+		if s.parts[key] == nil {
+			s.startPart(key, models.ReasoningSummary(""), event.ItemID, "", eventID)
+		}
+		s.delta(key, models.Delta{Kind: models.DeltaReasoningSummary, Text: event.Delta}, event.ItemID, "", eventID)
 	case "response.output_text.done":
 		key := responsePartKey{kind: "output_text", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
 		return s.finishValuePart(key, models.Text(""), models.DeltaText, event.Text, event.ItemID, eventID)
@@ -195,6 +212,9 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 		return s.finishValuePart(key, models.Refusal(""), models.DeltaRefusal, event.Refusal, event.ItemID, eventID)
 	case "response.reasoning_summary_text.done":
 		key := responsePartKey{kind: "reasoning_summary", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
+		return s.finishValuePart(key, models.ReasoningSummary(""), models.DeltaReasoningSummary, event.Text, event.ItemID, eventID)
+	case "response.reasoning_text.done":
+		key := responsePartKey{kind: "reasoning_text", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
 		return s.finishValuePart(key, models.ReasoningSummary(""), models.DeltaReasoningSummary, event.Text, event.ItemID, eventID)
 	case "response.reasoning_summary_part.done":
 		s.endPart(responsePartKey{kind: "reasoning_summary", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}, eventID)

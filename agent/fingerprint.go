@@ -80,7 +80,7 @@ func contentFingerprint(content []models.Content) (string, error) {
 	return encoder.sum(), nil
 }
 
-func stepFingerprint(calls []models.ToolCall, results []ToolResult) (string, error) {
+func stepFingerprint(calls []models.ToolCall, results []ToolOutput) (string, error) {
 	if len(calls) != len(results) {
 		return "", fmt.Errorf("fingerprint: %d calls but %d results", len(calls), len(results))
 	}

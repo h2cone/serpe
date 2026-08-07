@@ -128,8 +128,8 @@ func TestEventDefensiveCopy(t *testing.T) {
 		if ev.ToolCall != nil {
 			ev.ToolCall.Arguments[0] = 'X'
 		}
-		if ev.ToolResult != nil && len(ev.ToolResult.Content) > 0 && ev.ToolResult.Content[0].Text != nil {
-			ev.ToolResult.Content[0].Text.Text = "mut"
+		if ev.ToolOutput != nil && len(ev.ToolOutput.Content) > 0 && ev.ToolOutput.Content[0].Text != nil {
+			ev.ToolOutput.Content[0].Text.Text = "mut"
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -262,10 +262,10 @@ func TestCancelContext(t *testing.T) {
 	t.Parallel()
 	// Blocking tool waits on ctx.
 	started := make(chan struct{})
-	tool := newStubTool("f", func(ctx context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(ctx context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		close(started)
 		<-ctx.Done()
-		return agent.ToolResult{}, ctx.Err()
+		return agent.ToolOutput{}, ctx.Err()
 	})
 	model := &scriptedModel{responses: []*models.Response{
 		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),

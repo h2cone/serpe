@@ -16,6 +16,9 @@ var (
 	ErrNotFound = errors.New("session not found")
 	// ErrAlreadyExists reports that a session with the same ID already exists.
 	ErrAlreadyExists = errors.New("session already exists")
+	// ErrConflict reports an optimistic-concurrency failure: the transcript
+	// length observed before a write no longer matches at commit time.
+	ErrConflict = errors.New("session transcript conflict")
 )
 
 // invalidf wraps a format string with ErrInvalidSession.

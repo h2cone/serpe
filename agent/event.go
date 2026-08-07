@@ -23,7 +23,7 @@ const (
 //   - model_event: ModelTurn, Model
 //   - model_end: ModelTurn, Response
 //   - tool_start: ModelTurn, ToolIndex, ToolCall
-//   - tool_end: ModelTurn, ToolIndex, ToolCall, ToolResult
+//   - tool_end: ModelTurn, ToolIndex, ToolCall, ToolOutput
 //   - run_end: StopReason
 type Event struct {
 	Kind       EventKind
@@ -32,7 +32,7 @@ type Event struct {
 	Model      models.Event
 	Response   *models.Response
 	ToolCall   *models.ToolCall
-	ToolResult *ToolResult
+	ToolOutput *ToolOutput
 	StopReason StopReason
 }
 
@@ -59,8 +59,8 @@ func newToolStartEvent(turn, index int, call *models.ToolCall) *Event {
 	return &Event{Kind: EventToolStart, ModelTurn: turn, ToolIndex: index, ToolCall: call}
 }
 
-func newToolEndEvent(turn, index int, call *models.ToolCall, result *ToolResult) *Event {
-	return &Event{Kind: EventToolEnd, ModelTurn: turn, ToolIndex: index, ToolCall: call, ToolResult: result}
+func newToolEndEvent(turn, index int, call *models.ToolCall, result *ToolOutput) *Event {
+	return &Event{Kind: EventToolEnd, ModelTurn: turn, ToolIndex: index, ToolCall: call, ToolOutput: result}
 }
 
 func newRunEndEvent(reason StopReason) *Event {
@@ -76,9 +76,9 @@ func (e Event) clone() Event {
 		call.Arguments = append([]byte(nil), e.ToolCall.Arguments...)
 		out.ToolCall = &call
 	}
-	if e.ToolResult != nil {
-		result := e.ToolResult.clone()
-		out.ToolResult = &result
+	if e.ToolOutput != nil {
+		result := e.ToolOutput.clone()
+		out.ToolOutput = &result
 	}
 	return out
 }

@@ -126,7 +126,7 @@ func (l *callLedger) accept(calls []models.ToolCall) error {
 
 type toolBatch struct {
 	calls    []models.ToolCall
-	results  []ToolResult
+	results  []ToolOutput
 	contents []models.Content
 	index    int
 }
@@ -134,7 +134,7 @@ type toolBatch struct {
 func newToolBatch(calls []models.ToolCall) *toolBatch {
 	return &toolBatch{
 		calls:    calls,
-		results:  make([]ToolResult, 0, len(calls)),
+		results:  make([]ToolOutput, 0, len(calls)),
 		contents: make([]models.Content, 0, len(calls)),
 	}
 }
@@ -146,7 +146,7 @@ func (b *toolBatch) current() (models.ToolCall, bool) {
 	return b.calls[b.index], true
 }
 
-func (b *toolBatch) append(result ToolResult, content models.Content) {
+func (b *toolBatch) append(result ToolOutput, content models.Content) {
 	b.results = append(b.results, result)
 	b.contents = append(b.contents, content)
 	b.index++

@@ -13,16 +13,20 @@ import (
 	"github.com/h2cone/ouro/core/providers/internal/shared"
 )
 
+// errorEnvelope covers OpenAI-style nested errors and OpenAI-compatible
+// providers (for example xAI) that put a string in "error" and a top-level code.
 type errorEnvelope struct {
-	Error struct {
-		Message string          `json:"message"`
-		Type    string          `json:"type"`
-		Code    json.RawMessage `json:"code"`
-		Status  string          `json:"status"`
-	} `json:"error"`
+	Error   json.RawMessage `json:"error"`
 	Message string          `json:"message"`
 	Type    string          `json:"type"`
 	Code    json.RawMessage `json:"code"`
+}
+
+type errorObject struct {
+	Message string          `json:"message"`
+	Type    string          `json:"type"`
+	Code    json.RawMessage `json:"code"`
+	Status  string          `json:"status"`
 }
 
 // DecodeError consumes a bounded non-success response and normalizes it.
@@ -39,12 +43,13 @@ func DecodeError(response *http.Response, provider, operation string, limit int6
 	message := http.StatusText(response.StatusCode)
 	code := ""
 	if readErr == nil && !exceeded {
-		var envelope errorEnvelope
-		if json.Unmarshal(data, &envelope) == nil {
-			message = shared.FirstNonempty(envelope.Error.Message, envelope.Message, message)
-			code = shared.FirstNonempty(rawCode(envelope.Error.Code), envelope.Error.Type, envelope.Error.Status, rawCode(envelope.Code), envelope.Type)
+		if extracted, extractedCode, ok := parseErrorBody(data); ok {
+			message = shared.FirstNonempty(extracted, message)
+			code = extractedCode
 		} else if len(bytes.TrimSpace(data)) > 0 {
-			message = "provider returned a non-JSON error response"
+			// Prefer a short body snippet over a vague non-JSON label so
+			// gateway HTML/plain-text failures remain diagnosable.
+			message = truncateErrorSnippet(string(bytes.TrimSpace(data)), 256)
 		}
 	} else if exceeded {
 		message = fmt.Sprintf("provider error response exceeds %d bytes", limit)
@@ -60,6 +65,43 @@ func DecodeError(response *http.Response, provider, operation string, limit int6
 		RequestID: RequestID(response.Header), RetryAfter: RetryAfter(response.Header.Get("Retry-After")), Retryable: retryable,
 		Cause: readErr,
 	}
+}
+
+// parseErrorBody extracts a public message and code from common provider
+// error JSON shapes. ok is false when the body is not JSON or carries no
+// recognizable message/code fields.
+func parseErrorBody(data []byte) (message, code string, ok bool) {
+	var envelope errorEnvelope
+	if json.Unmarshal(data, &envelope) != nil {
+		return "", "", false
+	}
+	if len(envelope.Error) > 0 && !bytes.Equal(bytes.TrimSpace(envelope.Error), []byte("null")) {
+		var obj errorObject
+		if json.Unmarshal(envelope.Error, &obj) == nil {
+			message = obj.Message
+			code = shared.FirstNonempty(rawCode(obj.Code), obj.Type, obj.Status)
+		} else {
+			var text string
+			if json.Unmarshal(envelope.Error, &text) == nil {
+				message = text
+			}
+		}
+	}
+	message = shared.FirstNonempty(message, envelope.Message)
+	code = shared.FirstNonempty(code, rawCode(envelope.Code), envelope.Type)
+	if message == "" && code == "" {
+		return "", "", false
+	}
+	return message, code, true
+}
+
+func truncateErrorSnippet(value string, max int) string {
+	// Collapse whitespace so HTML error pages stay readable in one log line.
+	value = strings.Join(strings.Fields(value), " ")
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max] + "…"
 }
 
 // StatusKind maps an HTTP response status to the canonical model error kind

@@ -127,6 +127,53 @@ func TestUpdateCommit(t *testing.T) {
 	}
 }
 
+func TestSetCWDAndSetMetadata(t *testing.T) {
+	m := mustManager(t, NewMemoryStore())
+	ctx := context.Background()
+	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.SetCWD(ctx, "s1", "/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CWD != "/new" {
+		t.Fatalf("CWD = %q", got.CWD)
+	}
+	if _, err := m.SetCWD(ctx, "s1", "  "); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("blank CWD = %v", err)
+	}
+	got, err = m.SetMetadata(ctx, "s1", map[string]string{"title": "t", "owner": "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata["title"] != "t" || got.Metadata["owner"] != "u" {
+		t.Fatalf("metadata = %+v", got.Metadata)
+	}
+	// Caller may mutate the input map after SetMetadata.
+	in := map[string]string{"title": "x"}
+	got, err = m.SetMetadata(ctx, "s1", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in["title"] = "mut"
+	again, _ := m.Get(ctx, "s1")
+	if again.Metadata["title"] != "x" {
+		t.Fatal("SetMetadata must copy metadata")
+	}
+	got, err = m.SetMetadata(ctx, "s1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata != nil {
+		t.Fatalf("clear metadata: %+v", got.Metadata)
+	}
+	if _, err := m.SetMetadata(ctx, "s1", map[string]string{"bad key": "v"}); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("bad metadata key = %v", err)
+	}
+	_ = again
+}
+
 func TestUpdateFailureRollsBack(t *testing.T) {
 	ctx := context.Background()
 
@@ -252,6 +299,49 @@ func TestAppend(t *testing.T) {
 	check, _ = m.Get(ctx, "s1")
 	if len(check.Messages) != 2 {
 		t.Fatalf("failed batch committed partially: %d messages", len(check.Messages))
+	}
+}
+
+func TestAppendAt(t *testing.T) {
+	m := mustManager(t, NewMemoryStore())
+	ctx := context.Background()
+	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.AppendAt(ctx, "s1", 0); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("empty AppendAt = %v, want ErrInvalidSession", err)
+	}
+	if _, err := m.AppendAt(ctx, "s1", -1, models.NewUserMessage(models.Text("x"))); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("negative at = %v, want ErrInvalidSession", err)
+	}
+
+	got, err := m.AppendAt(ctx, "s1", 0,
+		models.NewUserMessage(models.Text("hi")),
+		models.NewAssistantMessage(models.Text("hello")),
+	)
+	if err != nil {
+		t.Fatalf("AppendAt: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("len = %d, want 2", len(got.Messages))
+	}
+
+	// Wrong expected length → conflict, no write.
+	if _, err := m.AppendAt(ctx, "s1", 0, models.NewUserMessage(models.Text("fork"))); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale AppendAt = %v, want ErrConflict", err)
+	}
+	check, _ := m.Get(ctx, "s1")
+	if len(check.Messages) != 2 {
+		t.Fatalf("conflict mutated transcript: %d", len(check.Messages))
+	}
+
+	// Correct length continues the transcript.
+	got, err = m.AppendAt(ctx, "s1", 2, models.NewUserMessage(models.Text("again")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 3 || got.Messages[2].Content[0].Text.Text != "again" {
+		t.Fatalf("AppendAt continue: %+v", got.Messages)
 	}
 }
 

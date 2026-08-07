@@ -58,7 +58,7 @@ func TestRunSingleToolThenAnswer(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"v":"x"}`)}),
 		textResponse("done"),
 	}}
-	tool := newStubTool("echo", func(_ context.Context, args json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("echo", func(_ context.Context, args json.RawMessage) (agent.ToolOutput, error) {
 		return agent.TextResult("echo:" + string(args)), nil
 	})
 	r, err := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
@@ -86,7 +86,7 @@ func TestRunMultiToolsOrder(t *testing.T) {
 	var order []string
 	var mu sync.Mutex
 	makeTool := func(name string) agent.Tool {
-		return newStubTool(name, func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+		return newStubTool(name, func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 			mu.Lock()
 			order = append(order, name)
 			mu.Unlock()
@@ -141,7 +141,7 @@ func TestRecoverableToolErrorResult(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 		textResponse("ok"),
 	}}
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		return agent.ErrorResult("bad args"), nil
 	})
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
@@ -159,8 +159,8 @@ func TestFatalToolError(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{
 		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{"secret":"do-not-leak"}`)}),
 	}}
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
-		return agent.ToolResult{}, errors.New("boom")
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
+		return agent.ToolOutput{}, errors.New("boom")
 	})
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
@@ -184,11 +184,11 @@ func TestFatalToolErrorPreservesEarlierBatchResults(t *testing.T) {
 		),
 	}}
 	var executions int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		if atomic.AddInt32(&executions, 1) == 1 {
 			return agent.TextResult("first completed"), nil
 		}
-		return agent.ToolResult{}, errors.New("second failed")
+		return agent.ToolOutput{}, errors.New("second failed")
 	})
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	result, err := r.Run(context.Background(), userReq("go"))
@@ -270,7 +270,7 @@ func TestMaxModelTurns(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "2", Name: "f", Arguments: json.RawMessage(`{}`)}),
 	}}
 	var execs int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		atomic.AddInt32(&execs, 1)
 		return agent.TextResult("ok"), nil
 	})
@@ -303,7 +303,7 @@ func TestMaxToolCalls(t *testing.T) {
 		),
 	}}
 	var execs int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		atomic.AddInt32(&execs, 1)
 		return agent.TextResult("ok"), nil
 	})
@@ -330,7 +330,7 @@ func TestMaxObservedTokens(t *testing.T) {
 		withUsage(toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}), 100),
 	}}
 	var execs int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		atomic.AddInt32(&execs, 1)
 		return agent.TextResult("ok"), nil
 	})
@@ -378,7 +378,7 @@ func TestStallDetection(t *testing.T) {
 		resp("3"),
 		textResponse("should not reach"),
 	}}
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		return agent.TextResult("same"), nil
 	})
 	r, _ := agent.NewRunner(agent.Config{
@@ -403,7 +403,7 @@ func TestStallResetsOnChange(t *testing.T) {
 		textResponse("done"),
 	}}
 	var n int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		v := atomic.AddInt32(&n, 1)
 		return agent.TextResult(string(rune('a' + v - 1))), nil
 	})
@@ -606,7 +606,7 @@ func TestNonSuccessToolResponseDoesNotExecute(t *testing.T) {
 	response.Status = models.ResponseStatusIncomplete
 	response.Candidates[0].FinishReason = models.FinishIncomplete
 	var executions int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		atomic.AddInt32(&executions, 1)
 		return agent.TextResult("unexpected"), nil
 	})
@@ -668,7 +668,7 @@ func TestToolChoiceResponseIsEnforcedBeforeExecution(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var executions int32
 			makeTool := func(name string) agent.Tool {
-				return newStubTool(name, func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+				return newStubTool(name, func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 					atomic.AddInt32(&executions, 1)
 					return agent.TextResult("unexpected"), nil
 				})
@@ -708,7 +708,7 @@ func TestObservedTokenAccountingRejectsNegativeAndSaturatesOverflow(t *testing.T
 		second := withUsage(toolCallResponse(models.ToolCall{ID: "2", Name: "f", Arguments: json.RawMessage(`{}`)}), 10)
 		model := &scriptedModel{responses: []*models.Response{first, second}}
 		var executions int32
-		tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+		tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 			atomic.AddInt32(&executions, 1)
 			return agent.TextResult("ok"), nil
 		})
@@ -735,7 +735,7 @@ func TestConcurrentRuns(t *testing.T) {
 		model.responses[i] = textResponse("ok")
 	}
 	var toolCalls int32
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 		atomic.AddInt32(&toolCalls, 1)
 		return agent.TextResult("x"), nil
 	})
@@ -759,8 +759,8 @@ func TestInvalidToolResultEmpty(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{
 		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 	}}
-	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
-		return agent.ToolResult{}, nil
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
+		return agent.ToolOutput{}, nil
 	})
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	_, err := r.Run(context.Background(), userReq("go"))

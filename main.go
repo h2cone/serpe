@@ -83,7 +83,7 @@ func (nowTool) Definition() models.Tool {
 	return models.NewTool("now", "Current wall-clock time in RFC 3339.", json.RawMessage(`{"type":"object","properties":{}}`))
 }
 
-func (nowTool) Execute(_ context.Context, _ json.RawMessage) (agent.ToolResult, error) {
+func (nowTool) Execute(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
 	return agent.TextResult(time.Now().Format(time.RFC3339)), nil
 }
 
