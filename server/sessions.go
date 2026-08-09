@@ -111,20 +111,15 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	sess, err := s.mgr.Get(r.Context(), id)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	meta := cloneMetadata(sess.Metadata)
+	changes := make(map[string]*string)
 	if body.Title != nil {
 		if *body.Title == "" {
-			delete(meta, metaKeyTitle)
+			changes[metaKeyTitle] = nil
 		} else {
-			meta = withTitle(meta, *body.Title)
+			changes[metaKeyTitle] = body.Title
 		}
 	}
-	updated, err := s.mgr.SetMetadata(r.Context(), id, meta)
+	updated, err := s.mgr.PatchMetadata(r.Context(), id, changes)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -1,0 +1,62 @@
+{
+  "id": "s1",
+  "title": "Contract session",
+  "cwd": "/work",
+  "parent_id": "parent",
+  "created_at": "2026-08-09T12:00:00Z",
+  "updated_at": "2026-08-09T12:00:00Z",
+  "message_count": 3,
+  "preview": "hello",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        },
+        {
+          "type": "image",
+          "uri": "https://example.com/image.png"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "reasoning_summary",
+          "text": "summary"
+        },
+        {
+          "type": "refusal",
+          "text": "cannot"
+        },
+        {
+          "type": "tool_call",
+          "id": "c1",
+          "name": "now",
+          "arguments": {
+            "zone": "UTC"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "call_id": "c1",
+          "name": "now",
+          "content": [
+            {
+              "type": "text",
+              "text": "12:00"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

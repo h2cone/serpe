@@ -5,8 +5,9 @@ import (
 	"github.com/h2cone/serpe/core/models"
 )
 
-// SSE wire frames aligned with ui/app/lib/types.ts SSEFrame.
-// mapEvent / mapModelEvent return these concrete types only (no map[string]any).
+// SSE wire frames are bound to the UI runtime decoder through the shared
+// server/testdata/sse_frames.json contract fixture. mapEvent / mapModelEvent
+// return these concrete types only (no map[string]any).
 
 type frameRunStart struct {
 	T string `json:"t"`

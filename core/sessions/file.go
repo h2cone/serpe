@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// FileStore is a disk-backed Store. Each session is a single JSON snapshot
+// FileStore is a disk-backed Store. Each record is a single opaque payload
 // file under root: <root>/<id>.json. Writes use temp file + rename for
 // atomic visibility. Cross-process coordination is out of scope.
 //
@@ -59,24 +59,24 @@ func NewFileStore(root string) (*FileStore, error) {
 	return s, nil
 }
 
-// Create inserts the session. See Store.Create.
+// Create inserts a record. See Store.Create.
 // Publish is exclusive (hard-link or O_EXCL claim): concurrent Creates for
 // the same ID return ErrAlreadyExists rather than clobbering via rename.
-func (s *FileStore) Create(ctx context.Context, session *Session) error {
+func (s *FileStore) Create(ctx context.Context, id string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := session.Validate(); err != nil {
-		return err
+	if !validID(id) {
+		return invalidf("invalid ID %q", id)
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
-	return s.atomicWrite(session, true)
+	return s.atomicWrite(id, data, true)
 }
 
-// Load returns an independent snapshot. See Store.Load.
+// Load returns an independent byte record. See Store.Load.
 // Load never deletes .tmp files: concurrent Create/Save may own them.
-func (s *FileStore) Load(ctx context.Context, id string) (*Session, error) {
+func (s *FileStore) Load(ctx context.Context, id string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -90,27 +90,27 @@ func (s *FileStore) Load(ctx context.Context, id string) (*Session, error) {
 		}
 		return nil, err
 	}
-	return unmarshalSession(data)
+	return data, nil
 }
 
 // Save replaces the stored record. See Store.Save.
-func (s *FileStore) Save(ctx context.Context, session *Session) error {
+func (s *FileStore) Save(ctx context.Context, id string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := session.Validate(); err != nil {
-		return err
+	if !validID(id) {
+		return invalidf("invalid ID %q", id)
 	}
-	if _, err := os.Stat(s.path(session.ID)); err != nil {
+	if _, err := os.Stat(s.path(id)); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
 		return err
 	}
-	return s.atomicWrite(session, false)
+	return s.atomicWrite(id, data, false)
 }
 
-// Delete removes the session. See Store.Delete.
+// Delete removes a record. See Store.Delete.
 func (s *FileStore) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -128,9 +128,9 @@ func (s *FileStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// List returns independent snapshots of every stored session. See Store.List.
+// List returns independent records. See Store.List.
 // Orphan .tmp files are ignored. Order is undefined.
-func (s *FileStore) List(ctx context.Context) ([]*Session, error) {
+func (s *FileStore) List(ctx context.Context) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (s *FileStore) List(ctx context.Context) ([]*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*Session, 0, len(entries))
+	out := make([]Record, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -151,14 +151,14 @@ func (s *FileStore) List(ctx context.Context) ([]*Session, error) {
 		if !validID(id) {
 			continue
 		}
-		got, err := s.Load(ctx, id)
+		data, err := s.Load(ctx, id)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				continue
 			}
 			return nil, err
 		}
-		out = append(out, got)
+		out = append(out, Record{ID: id, Data: data})
 	}
 	return out, nil
 }
@@ -167,19 +167,14 @@ func (s *FileStore) path(id string) string {
 	return filepath.Join(s.root, id+".json")
 }
 
-// atomicWrite encodes, writes a same-directory temp file, fsyncs, then
-// publishes to the destination. When createOnly is true, publish is exclusive
-// (no clobber). When false, rename replaces an existing destination (Save).
-func (s *FileStore) atomicWrite(session *Session, createOnly bool) error {
-	// Defensive clone so concurrent mutation of the caller's session cannot
-	// affect the bytes we write after Validate.
-	snap := session.Clone()
-	data, err := marshalSession(snap)
-	if err != nil {
-		return err
-	}
+// atomicWrite writes a same-directory temp file, fsyncs, then publishes to the
+// destination. When createOnly is true, publish is exclusive (no clobber).
+// When false, rename replaces an existing destination (Save).
+func (s *FileStore) atomicWrite(id string, data []byte, createOnly bool) error {
+	// Own the byte slice before performing multi-step I/O.
+	data = append([]byte(nil), data...)
 	random := randomHex(8)
-	tmpName := snap.ID + "." + random + ".tmp"
+	tmpName := id + "." + random + ".tmp"
 	tmpPath := filepath.Join(s.root, tmpName)
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -204,7 +199,7 @@ func (s *FileStore) atomicWrite(session *Session, createOnly bool) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	dest := s.path(snap.ID)
+	dest := s.path(id)
 	if createOnly {
 		if err := publishCreate(tmpPath, dest); err != nil {
 			return err
@@ -220,7 +215,7 @@ func (s *FileStore) atomicWrite(session *Session, createOnly bool) error {
 	committed = true
 	// Best-effort: remove other orphan temps for this id (not this random;
 	// that file was renamed or linked away).
-	s.cleanupIDTmp(snap.ID)
+	s.cleanupIDTmp(id)
 	// Best-effort directory fsync is platform-specific; omitted on Windows.
 	return nil
 }

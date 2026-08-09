@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/h2cone/serpe/agent"
-	"github.com/h2cone/serpe/compose"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/sessions"
 	"github.com/h2cone/serpe/server"
@@ -194,6 +193,10 @@ func (nowTool) Execute(ctx context.Context, arguments json.RawMessage) (agent.To
 }
 
 func newTestServer(t *testing.T, model models.Model, tools []agent.Tool, newID func() string) (*server.Server, *sessions.Manager) {
+	return newTestServerWithStore(t, model, tools, newID, sessions.NewMemoryStore())
+}
+
+func newTestServerWithStore(t *testing.T, model models.Model, tools []agent.Tool, newID func() string, store sessions.Store) (*server.Server, *sessions.Manager) {
 	t.Helper()
 	if model == nil {
 		model = &scriptedModel{responses: []*models.Response{textResponse("hello")}}
@@ -205,16 +208,12 @@ func newTestServer(t *testing.T, model models.Model, tools []agent.Tool, newID f
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	mgr, err := sessions.NewManager(sessions.NewMemoryStore())
+	mgr, err := sessions.NewManager(store)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	turns, err := compose.New(compose.Config{Runner: runner, Manager: mgr})
-	if err != nil {
-		t.Fatalf("compose.New: %v", err)
-	}
 	srv, err := server.New(server.Config{
-		Turns:   turns,
+		Runner:  runner,
 		Manager: mgr,
 		CWD:     "/tmp",
 		NewID:   newID,

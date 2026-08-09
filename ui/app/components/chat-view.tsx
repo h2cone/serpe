@@ -8,7 +8,7 @@ import {
   type StreamingState,
   type TranscriptState,
 } from "~/lib/transcript";
-import type { Message, SessionSummary } from "~/lib/types";
+import type { Message, SessionSummary } from "~/lib/wire";
 import { Composer } from "./composer";
 import { ContentPartView, ToolCallCard } from "./content-part";
 
@@ -76,12 +76,12 @@ export function ChatView({
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="chat-scroll">
         <MessageList state={state} />
         <div ref={bottomRef} />
       </div>
       {state.error && (
-        <div className="border-t border-red-900/50 bg-red-950/40 px-4 py-2 text-xs text-red-200">
+        <div className="error-banner">
           {state.error}
           {state.stop ? ` (${state.stop})` : ""}
         </div>
@@ -98,7 +98,7 @@ export function ChatView({
 
 function MessageList({ state }: { state: TranscriptState }) {
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    <div className="message-list">
       {state.messages.map((m, i) => (
         <MessageBubble key={i} message={m} />
       ))}
@@ -108,39 +108,44 @@ function MessageList({ state }: { state: TranscriptState }) {
 }
 
 function MessageBubble({ message }: { message: Message }) {
-  const isUser = message.role === "user";
+  const containsToolActivity = message.content.some(
+    (part) => part.type === "tool_call" || part.type === "tool_result",
+  );
+  const isToolActivity =
+    message.content.length > 0 &&
+    containsToolActivity &&
+    message.content.every(
+      (part) =>
+        part.type === "tool_call" ||
+        part.type === "tool_result" ||
+        part.type === "reasoning_summary",
+    );
+  const isUser = message.role === "user" && !isToolActivity;
+  const kind = isToolActivity ? "activity" : isUser ? "user" : "assistant";
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${
-          isUser
-            ? "bg-sky-700 text-white"
-            : "bg-slate-900 text-slate-100 ring-1 ring-slate-800"
-        }`}
-      >
+    <article className={`message-row ${kind}`} aria-label={isUser ? "You" : "serpe"}>
+      <div className={`message-bubble ${kind}`}>
         {message.content.map((p, i) => (
           <ContentPartView key={i} part={p} />
         ))}
       </div>
-    </div>
+    </article>
   );
 }
 
 function StreamingAssistant({ stream }: { stream: StreamingState }) {
   const tools = Object.values(stream.tools);
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[90%] rounded-2xl bg-slate-900 px-3 py-2 text-sm ring-1 ring-sky-900/60">
+    <article className="message-row assistant" aria-label="serpe">
+      <div className="message-bubble streaming">
         {stream.reasoning && (
-          <details open className="mb-2 text-xs text-slate-400">
-            <summary className="cursor-pointer">Thinking</summary>
-            <p className="mt-1 whitespace-pre-wrap">{stream.reasoning}</p>
+          <details open className="thinking">
+            <summary>Thinking</summary>
+            <p>{stream.reasoning}</p>
           </details>
         )}
         {stream.refusal && (
-          <p className="mb-2 whitespace-pre-wrap text-amber-300">
-            {stream.refusal}
-          </p>
+          <p className="refusal">{stream.refusal}</p>
         )}
         {tools.map((t) => {
           let args: Record<string, unknown> | undefined;
@@ -163,21 +168,21 @@ function StreamingAssistant({ stream }: { stream: StreamingState }) {
           );
         })}
         {stream.text && (
-          <p className="whitespace-pre-wrap">
+          <p className="stream-text">
             {stream.text}
-            <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-sky-400 align-middle" />
+            <span className="stream-cursor" />
           </p>
         )}
         {!stream.text && tools.length === 0 && (
-          <span className="inline-block h-3 w-1.5 animate-pulse bg-sky-400" />
+          <span className="stream-cursor" />
         )}
         {stream.usage && (
-          <p className="mt-2 text-[10px] text-slate-500">
+          <p className="usage">
             tokens: {stream.usage.total_tokens ?? "—"}
             {stream.finish ? ` · ${stream.finish}` : ""}
           </p>
         )}
       </div>
-    </div>
+    </article>
   );
 }

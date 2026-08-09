@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/h2cone/serpe/agent"
@@ -103,7 +104,8 @@ func TestRunSSEFailureNoPersist(t *testing.T) {
 }
 
 func TestRunMissingSession(t *testing.T) {
-	srv, _ := newTestServer(t, nil, nil, nil)
+	store := &loadCountingStore{Store: sessions.NewMemoryStore()}
+	srv, _ := newTestServerWithStore(t, nil, nil, nil, store)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"nope","prompt":"x"}`))
@@ -111,6 +113,57 @@ func TestRunMissingSession(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type=%q, want JSON before SSE is opened", ct)
+	}
+	if loads := store.loads.Load(); loads != 1 {
+		t.Fatalf("missing run loaded session %d times, want 1", loads)
+	}
+}
+
+func TestRunLoadsSessionOnceBeforeOpeningModelStream(t *testing.T) {
+	store := &loadCountingStore{Store: sessions.NewMemoryStore()}
+	model := &observingModel{
+		Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}},
+		beforeStream: func() {
+			if loads := store.loads.Load(); loads != 1 {
+				t.Errorf("turn start loaded session %d times, want 1", loads)
+			}
+		},
+	}
+	srv, mgr := newTestServerWithStore(t, model, nil, nil, store)
+	if _, err := mgr.Create(context.Background(), sessions.New("s1", "/tmp")); err != nil {
+		t.Fatal(err)
+	}
+	store.loads.Store(0)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs",
+		bytes.NewBufferString(`{"session_id":"s1","prompt":"hello"}`))
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+type loadCountingStore struct {
+	sessions.Store
+	loads atomic.Int64
+}
+
+func (s *loadCountingStore) Load(ctx context.Context, id string) ([]byte, error) {
+	s.loads.Add(1)
+	return s.Store.Load(ctx, id)
+}
+
+type observingModel struct {
+	models.Model
+	beforeStream func()
+}
+
+func (m *observingModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+	m.beforeStream()
+	return m.Model.Stream(ctx, req)
 }
 
 func TestRunWithTool(t *testing.T) {

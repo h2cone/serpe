@@ -17,16 +17,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#f4f6f3" />
         <Meta />
         <Links />
         {/* Critical shell CSS for FCP before full stylesheet applies */}
         <style
           dangerouslySetInnerHTML={{
             __html: `
-              html,body{height:100%;margin:0;background:#0b0f14;color:#e8eef5;
-              font-family:ui-sans-serif,system-ui,sans-serif}
+              html,body{height:100%;margin:0;background:#f4f6f3;color:#15201c;
+              color-scheme:light;font-family:ui-sans-serif,system-ui,sans-serif}
               .shell{display:flex;height:100%}
-              .sidebar{width:16rem;border-right:1px solid #1e293b;padding:0.75rem;overflow:auto}
+              .sidebar{width:17rem;border-right:1px solid #dbe1dc;background:#edf0ed;
+              padding:1.125rem .875rem 1rem;overflow:auto}
               .main{flex:1;display:flex;flex-direction:column;min-width:0}
             `,
           }}
@@ -58,9 +60,12 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     details = error.message;
   }
   return (
-    <main className="p-8">
-      <h1 className="text-xl font-semibold">{message}</h1>
-      <p className="mt-2 text-slate-400">{details}</p>
+    <main className="error-page">
+      <div className="error-page-inner">
+        <div className="empty-mark" aria-hidden="true" />
+        <h1>{message}</h1>
+        <p>{details}</p>
+      </div>
     </main>
   );
 }

@@ -1,8 +1,9 @@
 import { Form, useLoaderData } from "react-router";
 import type { Route } from "./+types/sessions.$id";
 import { ChatView } from "~/components/chat-view";
+import { BranchIcon, TrashIcon } from "~/components/icons";
 import { api } from "~/lib/api";
-import type { SessionSummary } from "~/lib/types";
+import type { SessionSummary } from "~/lib/wire";
 
 export async function loader({ params }: Route.LoaderArgs) {
   const id = params.id!;
@@ -35,7 +36,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 export default function SessionRoute() {
   const { meta, messages } = useLoaderData<typeof loader>();
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="session-page">
       <SessionHeader meta={meta} />
       <ChatView meta={meta} initialMessages={messages} />
     </div>
@@ -44,23 +45,29 @@ export default function SessionRoute() {
 
 function SessionHeader({ meta }: { meta: SessionSummary }) {
   return (
-    <header className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
-      <div className="min-w-0">
-        <h1 className="truncate text-sm font-semibold">
-          {meta.title || meta.preview || meta.id}
-        </h1>
-        <p className="truncate text-[11px] text-slate-500">
-          {meta.id} · {meta.cwd}
+    <header className="session-header">
+      <div className="session-heading">
+        <h1>{meta.title || meta.preview || meta.id}</h1>
+        <p
+          className="session-context"
+          title={`Session ${meta.id} · ${meta.cwd}`}
+          aria-label={`Session ${meta.id}, working directory ${meta.cwd}`}
+        >
+          <span className="session-id">{meta.id.slice(0, 12)}</span>
+          <span className="context-separator" aria-hidden="true" />
+          <span className="session-cwd">{meta.cwd}</span>
         </p>
       </div>
-      <div className="flex gap-1">
+      <div className="header-actions">
         <Form method="post">
           <input type="hidden" name="intent" value="fork" />
           <button
             type="submit"
-            className="rounded px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+            className="quiet-button"
+            aria-label="Fork session"
           >
-            Fork
+            <BranchIcon className="button-icon" />
+            <span className="button-label">Fork</span>
           </button>
         </Form>
         <Form
@@ -72,9 +79,11 @@ function SessionHeader({ meta }: { meta: SessionSummary }) {
           <input type="hidden" name="intent" value="delete" />
           <button
             type="submit"
-            className="rounded px-2 py-1 text-xs text-red-300 hover:bg-slate-800"
+            className="quiet-button danger"
+            aria-label="Delete session"
           >
-            Delete
+            <TrashIcon className="button-icon" />
+            <span className="button-label">Delete</span>
           </button>
         </Form>
       </div>

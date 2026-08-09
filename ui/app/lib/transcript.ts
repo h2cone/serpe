@@ -1,4 +1,4 @@
-import type { ContentPart, Message, SSEFrame } from "./types";
+import type { ContentPart, Message, SSEFrame } from "./wire";
 
 /** One in-flight tool: arg streaming + optional execution status/result. */
 export type StreamTool = {

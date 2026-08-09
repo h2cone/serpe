@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -12,11 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/h2cone/serpe/agent"
-	"github.com/h2cone/serpe/compose"
-	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/core/providers"
 	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/internal/bootstrap"
 	"github.com/h2cone/serpe/server"
 )
 
@@ -45,23 +41,8 @@ func main() {
 
 	mgr := must(sessions.NewManager(store))
 
-	provider := must(providers.New(providers.Config{
-		Protocol: providers.OpenAIResponses,
-		APIKey:   os.Getenv("OPENAI_API_KEY"),
-		BaseURL:  os.Getenv("OPENAI_BASE_URL"),
-	}))
-	modelName := os.Getenv("OPENAI_DEFAULT_MODEL")
-	if modelName == "" {
-		modelName = "gpt-4.1-mini"
-	}
-	model := must(provider.Model(modelName))
-
-	runner := must(agent.NewRunner(agent.Config{
-		Model: model,
-		Tools: []agent.Tool{nowTool{}},
-	}))
-	turns := must(compose.New(compose.Config{Runner: runner, Manager: mgr}))
-	srv := must(server.New(server.Config{Turns: turns, Manager: mgr, CWD: cwd}))
+	runner := must(bootstrap.NewRunner(bootstrap.RunnerConfigFromEnv()))
+	srv := must(server.New(server.Config{Runner: runner, Manager: mgr, CWD: cwd}))
 
 	httpSrv := &http.Server{
 		Addr:    addr,
@@ -82,16 +63,6 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-}
-
-type nowTool struct{}
-
-func (nowTool) Definition() models.Tool {
-	return models.NewTool("now", "Current wall-clock time in RFC 3339.", json.RawMessage(`{"type":"object","properties":{}}`))
-}
-
-func (nowTool) Execute(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
-	return agent.TextResult(time.Now().Format(time.RFC3339)), nil
 }
 
 func envOr(k, def string) string {

@@ -8,31 +8,32 @@ import (
 	"github.com/h2cone/serpe/core/models"
 )
 
-// schemaVersion is the FileStore disk format version. Bump when the codec
-// shape changes and add migration for older files.
+// schemaVersion is the Manager-owned record format version. Bump when the
+// codec shape changes and add migration for older records.
 const schemaVersion = 1
 
-// diskSession is the stable on-disk JSON shape. Field names are independent of
-// Go struct identifiers so core/models need not grow JSON tags for persistence.
-// Content blocks use models.ContentRecord — the single content-kind table.
-type diskSession struct {
-	SchemaVersion int                   `json:"schema_version"`
-	ID            string                `json:"id"`
-	ParentID      string                `json:"parent_id"`
-	CWD           string                `json:"cwd"`
-	CreatedAt     time.Time             `json:"created_at"`
-	UpdatedAt     time.Time             `json:"updated_at"`
-	Messages      []diskMessage         `json:"messages"`
-	Metadata      map[string]string     `json:"metadata,omitempty"`
+// sessionRecord is the stable persisted JSON shape. Field names are
+// independent of Go struct identifiers so core/models need not grow JSON tags
+// for persistence. Content blocks use models.ContentRecord, the single
+// content-kind table.
+type sessionRecord struct {
+	SchemaVersion int               `json:"schema_version"`
+	ID            string            `json:"id"`
+	ParentID      string            `json:"parent_id"`
+	CWD           string            `json:"cwd"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
+	Messages      []recordMessage   `json:"messages"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
-type diskMessage struct {
-	Role          string                `json:"role"`
+type recordMessage struct {
+	Role          string                 `json:"role"`
 	Content       []models.ContentRecord `json:"content"`
-	ProviderState *diskProviderState    `json:"provider_state,omitempty"`
+	ProviderState *recordProviderState   `json:"provider_state,omitempty"`
 }
 
-type diskProviderState struct {
+type recordProviderState struct {
 	Provider string          `json:"provider"`
 	Data     json.RawMessage `json:"data"`
 }
@@ -44,14 +45,14 @@ func marshalSession(s *Session) ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	out := diskSession{
+	out := sessionRecord{
 		SchemaVersion: schemaVersion,
 		ID:            s.ID,
 		ParentID:      s.ParentID, // empty encodes as ""
 		CWD:           s.CWD,
 		CreatedAt:     s.CreatedAt.UTC(),
 		UpdatedAt:     s.UpdatedAt.UTC(),
-		Messages:      make([]diskMessage, len(s.Messages)),
+		Messages:      make([]recordMessage, len(s.Messages)),
 	}
 	for i := range s.Messages {
 		dm, err := encodeMessage(s.Messages[i])
@@ -74,7 +75,7 @@ func marshalSession(s *Session) ([]byte, error) {
 }
 
 func unmarshalSession(data []byte) (*Session, error) {
-	var raw diskSession
+	var raw sessionRecord
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("%w: decode: %v", ErrInvalidSession, err)
 	}
@@ -106,26 +107,26 @@ func unmarshalSession(data []byte) (*Session, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	return s.Clone(), nil
+	return s, nil
 }
 
-func encodeMessage(m models.Message) (diskMessage, error) {
-	out := diskMessage{
+func encodeMessage(m models.Message) (recordMessage, error) {
+	out := recordMessage{
 		Role:    string(m.Role),
 		Content: make([]models.ContentRecord, len(m.Content)),
 	}
 	for i := range m.Content {
 		rec, err := models.EncodeContent(m.Content[i])
 		if err != nil {
-			return diskMessage{}, fmt.Errorf("content %d: %w", i, err)
+			return recordMessage{}, fmt.Errorf("content %d: %w", i, err)
 		}
 		out.Content[i] = rec
 	}
 	if m.ProviderState != nil {
 		if err := m.ProviderState.Validate(); err != nil {
-			return diskMessage{}, err
+			return recordMessage{}, err
 		}
-		out.ProviderState = &diskProviderState{
+		out.ProviderState = &recordProviderState{
 			Provider: m.ProviderState.Provider,
 			Data:     append(json.RawMessage(nil), m.ProviderState.Data...),
 		}
@@ -133,7 +134,7 @@ func encodeMessage(m models.Message) (diskMessage, error) {
 	return out, nil
 }
 
-func decodeMessage(m diskMessage) (models.Message, error) {
+func decodeMessage(m recordMessage) (models.Message, error) {
 	out := models.Message{
 		Role:    models.Role(m.Role),
 		Content: make([]models.Content, len(m.Content)),

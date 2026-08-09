@@ -29,14 +29,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fail fast for missing sessions before opening the SSE stream.
-	// compose.Stream loads the session again for the turn; this Get is only a
-	// pre-flight so clients get JSON 404 instead of a half-open event stream.
-	if _, err := s.mgr.Get(r.Context(), body.SessionID); err != nil {
-		writeErr(w, err)
-		return
-	}
-
+	// Stream loads the session before returning, so lookup and runner-open
+	// failures are still reported as JSON before SSE headers are written.
 	turn, err := s.turns.Stream(r.Context(), body.SessionID, body.Prompt)
 	if err != nil {
 		writeErr(w, err)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseSSE } from "./sse";
+import { WireProtocolError } from "./wire";
 
 function readerFrom(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
   const enc = new TextEncoder();
@@ -38,13 +39,32 @@ describe("parseSSE", () => {
   });
 
   it("joins multi-line data", async () => {
-    const body = "data: {\"t\":\"error\",\n\ndata: \"message\":\"x\"}\n\n";
-    // simpler: two data lines that form invalid JSON alone — use valid join
     const ok =
       'data: {"t":"error",\n' + 'data: "message":"x"}\n\n';
     // Actually SSE multi-data join with newline: {"t":"error",\n"message":"x"}
     const frames = [];
     for await (const f of parseSSE(readerFrom([ok]))) frames.push(f);
     expect(frames[0]).toEqual({ t: "error", message: "x" });
+  });
+
+  it("rejects a known frame with missing required fields", async () => {
+    const consume = async () => {
+      for await (const _ of parseSSE(
+        readerFrom(['data: {"t":"tool_start","turn":1,"idx":0}\n\n']),
+      )) {
+        // consume the generator so boundary validation runs
+      }
+    };
+    await expect(consume()).rejects.toBeInstanceOf(WireProtocolError);
+  });
+
+  it("ignores unknown frame types for forward compatibility", async () => {
+    const frames = [];
+    for await (const frame of parseSSE(
+      readerFrom(['data: {"t":"future_frame","value":1}\n\n']),
+    )) {
+      frames.push(frame);
+    }
+    expect(frames).toEqual([]);
   });
 });

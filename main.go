@@ -4,16 +4,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"time"
 
 	"github.com/h2cone/serpe/agent"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/core/providers"
+	"github.com/h2cone/serpe/internal/bootstrap"
 )
 
 func main() {
@@ -23,17 +21,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	provider := must(providers.New(providers.Config{
-		Protocol: providers.OpenAIResponses,
-		APIKey:   os.Getenv("OPENAI_API_KEY"),
-		BaseURL:  os.Getenv("OPENAI_BASE_URL"),
-	}))
-	model := must(provider.Model(os.Getenv("OPENAI_DEFAULT_MODEL")))
-
-	runner := must(agent.NewRunner(agent.Config{
-		Model: model,
-		Tools: []agent.Tool{nowTool{}},
-	}))
+	runner := must(bootstrap.NewRunner(bootstrap.RunnerConfigFromEnv()))
 
 	prompt := "What time is it?"
 	if len(os.Args) > 1 {
@@ -75,16 +63,6 @@ func main() {
 		return
 	}
 	log.Printf("stopped: %s", result.StopReason)
-}
-
-type nowTool struct{}
-
-func (nowTool) Definition() models.Tool {
-	return models.NewTool("now", "Current wall-clock time in RFC 3339.", json.RawMessage(`{"type":"object","properties":{}}`))
-}
-
-func (nowTool) Execute(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
-	return agent.TextResult(time.Now().Format(time.RFC3339)), nil
 }
 
 func render(ev agent.Event) {

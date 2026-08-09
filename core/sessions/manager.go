@@ -13,8 +13,8 @@ import (
 
 // Manager serializes composite write operations per session ID and owns the
 // commit semantics: an operation works on a private copy and only becomes
-// visible when validation and the store write both succeed. Mutator errors,
-// canceled contexts, and store errors never pollute the committed transcript.
+// visible when validation and the store write both succeed. Validation,
+// cancellation, and store errors never pollute the committed transcript.
 type Manager struct {
 	store Store
 	mu    sync.Mutex
@@ -77,35 +77,39 @@ func (m *Manager) lockTwo(a, b string) func() {
 	}
 }
 
-// committed returns an independent snapshot of the state just written. It
-// prefers a fresh Load so the caller observes store-normalized data, but if
-// that Load fails (for example a context canceled after the write landed) it
-// returns a clone of what was committed rather than reporting an error for a
-// change that is already durable. This keeps "non-nil error means nothing was
-// committed" true for callers even when the post-write Load races with
-// cancellation.
-func (m *Manager) committed(ctx context.Context, wrote *Session, id string) (*Session, error) {
-	got, err := m.store.Load(ctx, id)
-	if err == nil {
-		return got, nil
+// load is the single record-to-domain boundary. Backends never interpret a
+// Session; Manager decodes, validates, and verifies that the stored payload's
+// identity matches its storage key.
+func (m *Manager) load(ctx context.Context, id string) (*Session, error) {
+	data, err := m.store.Load(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	return wrote.Clone(), nil
+	got, err := unmarshalSession(data)
+	if err != nil {
+		return nil, err
+	}
+	if got.ID != id {
+		return nil, invalidf("record ID %q does not match key %q", got.ID, id)
+	}
+	return got, nil
 }
 
 // Create validates and saves the snapshot, then returns an independent copy.
-// The input is cloned at the Manager boundary, so the caller may mutate it
-// freely after the call regardless of whether the store clones on write.
+// The input is cloned before encoding, so no caller-owned Session memory
+// crosses the Store boundary.
 func (m *Manager) Create(ctx context.Context, session *Session) (*Session, error) {
-	if err := session.Validate(); err != nil {
-		return nil, err
-	}
 	commit := session.Clone()
-	release := m.lock(session.ID)
-	defer release()
-	if err := m.store.Create(ctx, commit); err != nil {
+	data, err := marshalSession(commit)
+	if err != nil {
 		return nil, err
 	}
-	return m.committed(ctx, commit, session.ID)
+	release := m.lock(commit.ID)
+	defer release()
+	if err := m.store.Create(ctx, commit.ID, data); err != nil {
+		return nil, err
+	}
+	return commit.Clone(), nil
 }
 
 // Get loads an independent, validated snapshot.
@@ -113,14 +117,7 @@ func (m *Manager) Get(ctx context.Context, id string) (*Session, error) {
 	if !validID(id) {
 		return nil, invalidf("get: invalid ID %q", id)
 	}
-	got, err := m.store.Load(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if err := got.Validate(); err != nil {
-		return nil, err
-	}
-	return got, nil
+	return m.load(ctx, id)
 }
 
 // List returns independent snapshots of every stored session. Order is
@@ -132,11 +129,12 @@ func (m *Manager) List(ctx context.Context) ([]*Session, error) {
 		return nil, err
 	}
 	out := make([]*Session, 0, len(all))
-	for _, s := range all {
-		if s == nil {
+	for _, record := range all {
+		if !validID(record.ID) {
 			continue
 		}
-		if err := s.Validate(); err != nil {
+		s, err := unmarshalSession(record.Data)
+		if err != nil || s.ID != record.ID {
 			continue
 		}
 		out = append(out, s)
@@ -158,7 +156,7 @@ func (m *Manager) Fork(ctx context.Context, sourceID, newID string) (*Session, e
 	release := m.lockTwo(sourceID, newID)
 	defer release()
 
-	src, err := m.store.Load(ctx, sourceID)
+	src, err := m.load(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("fork: load source %q: %w", sourceID, err)
 	}
@@ -169,34 +167,23 @@ func (m *Manager) Fork(ctx context.Context, sourceID, newID string) (*Session, e
 	}
 	now := time.Now().UTC()
 	// Deep-copy the source so the child never aliases the source transcript or
-	// metadata, even with a store that does not clone on write.
+	// metadata before the two snapshots are encoded independently.
 	child := src.Clone()
 	child.ID = newID
 	child.ParentID = src.ID
 	child.CreatedAt = now
 	child.UpdatedAt = now
-	if err := child.Validate(); err != nil {
+	data, err := marshalSession(child)
+	if err != nil {
 		return nil, err
 	}
-	if err := m.store.Create(ctx, child); err != nil {
+	if err := m.store.Create(ctx, child.ID, data); err != nil {
 		return nil, err
 	}
-	return m.committed(ctx, child, newID)
+	return child.Clone(), nil
 }
 
-// immutableCreatedAt marks the CreatedAt field on the working copy while a
-// mutator runs. The Manager restores the real value afterwards; any mutator
-// assignment to CreatedAt is detected by comparison with this marker, even on
-// systems whose wall clock is too coarse to tell two time.Now() values apart.
-//
-// It is deliberately a recognizable non-zero instant (the Unix epoch) rather
-// than the zero time.Time{}: it must not trip Session.Validate's IsZero guard
-// if a mutator inspects or validates the working copy mid-mutation, while still
-// being a value no real creation timestamp uses.
-var immutableCreatedAt = time.Unix(0, 0).UTC()
-
-// SetCWD updates the session working directory. Prefer this over Update when
-// only CWD changes.
+// SetCWD atomically updates the session working directory.
 func (m *Manager) SetCWD(ctx context.Context, id, cwd string) (*Session, error) {
 	if strings.TrimSpace(cwd) == "" {
 		return nil, invalidf("set cwd: CWD is required")
@@ -204,12 +191,11 @@ func (m *Manager) SetCWD(ctx context.Context, id, cwd string) (*Session, error) 
 	return m.apply(ctx, id, func(s *Session) error {
 		s.CWD = cwd
 		return nil
-	}, false)
+	})
 }
 
 // SetMetadata replaces the session metadata map. A nil map clears metadata.
-// Keys must satisfy the portable ID alphabet. Prefer this over Update when
-// only metadata changes.
+// Keys must satisfy the portable ID alphabet.
 func (m *Manager) SetMetadata(ctx context.Context, id string, metadata map[string]string) (*Session, error) {
 	return m.apply(ctx, id, func(s *Session) error {
 		if metadata == nil {
@@ -221,85 +207,86 @@ func (m *Manager) SetMetadata(ctx context.Context, id string, metadata map[strin
 			s.Metadata[k] = v
 		}
 		return nil
-	}, false)
+	})
 }
 
-// Update is a low-level extension point for rare multi-field edits. Prefer
-// Append, AppendAt, SetCWD, and SetMetadata — those APIs cannot violate
-// transcript prefix immutability or ID/ParentID/CreatedAt invariants.
+// PatchMetadata atomically applies key changes to the current metadata. A
+// non-nil value sets a key and a nil value deletes it. Unmentioned keys are
+// preserved. The complete read-modify-write runs under the session's write
+// lease, so concurrent patches cannot overwrite unrelated keys.
 //
-// Update loads a snapshot, deep-copies it, runs the mutator on the private
-// copy, re-validates, saves, and returns the new independent snapshot. The
-// mutator pointer is valid only for the duration of the call. A mutator may
-// only append to Messages and modify CWD and Metadata; ID, ParentID, and
-// CreatedAt are immutable, existing messages must remain an unchanged prefix,
-// and UpdatedAt assignments are ignored and replaced with a non-decreasing UTC
-// time by the Manager.
-//
-// The per-session write lease is held for the whole mutator, so the mutator
-// must not re-enter the Manager (Append, Update, Fork, or Delete) for the same
-// session ID: Go's mutex is not reentrant and such a call deadlocks. Mutate
-// only the private copy it receives.
-func (m *Manager) Update(ctx context.Context, id string, mutate func(*Session) error) (*Session, error) {
-	if mutate == nil {
-		return nil, invalidf("update: nil mutator")
+// The changes map and pointed-to strings are copied before the write begins;
+// the caller may reuse or mutate them after PatchMetadata returns. An empty
+// patch performs a read without changing UpdatedAt.
+func (m *Manager) PatchMetadata(ctx context.Context, id string, changes map[string]*string) (*Session, error) {
+	if len(changes) == 0 {
+		return m.Get(ctx, id)
 	}
-	return m.apply(ctx, id, mutate, true)
+	owned := make(map[string]*string, len(changes))
+	for key, value := range changes {
+		if !validID(key) {
+			return nil, invalidf("patch metadata: invalid key %q", key)
+		}
+		if value == nil {
+			owned[key] = nil
+			continue
+		}
+		ownedValue := *value
+		owned[key] = &ownedValue
+	}
+	return m.apply(ctx, id, func(s *Session) error {
+		for key, value := range owned {
+			if value == nil {
+				delete(s.Metadata, key)
+				continue
+			}
+			if s.Metadata == nil {
+				s.Metadata = make(map[string]string)
+			}
+			s.Metadata[key] = *value
+		}
+		if len(s.Metadata) == 0 {
+			s.Metadata = nil
+		}
+		return nil
+	})
 }
 
-// apply is the shared load-mutate-validate-save-commit pipeline for Update and
-// Append. When verifyPrefix is true, existing messages are checked as an
-// unchanged prefix (the Update contract); append-only callers pass false to
-// skip that O(transcript) scan, since their mutator never touches existing
-// messages.
-func (m *Manager) apply(ctx context.Context, id string, mutate func(*Session) error, verifyPrefix bool) (*Session, error) {
+// apply is the package-private load-mutate-validate-save transaction used by
+// intent-shaped writes. Its callbacks are defined next to the public method;
+// arbitrary caller code never runs while the per-session lease is held.
+func (m *Manager) apply(ctx context.Context, id string, mutate func(*Session) error) (*Session, error) {
 	if !validID(id) {
-		return nil, invalidf("update: invalid ID %q", id)
+		return nil, invalidf("write: invalid ID %q", id)
 	}
 	release := m.lock(id)
 	defer release()
 
-	current, err := m.store.Load(ctx, id)
+	current, err := m.load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	work := current.Clone()
-	work.CreatedAt = immutableCreatedAt
 	if err := mutate(work); err != nil {
 		return nil, err
-	}
-	if work.ID != current.ID || work.ParentID != current.ParentID || work.CreatedAt != immutableCreatedAt {
-		return nil, invalidf("update: ID, ParentID, and CreatedAt are immutable")
-	}
-	work.CreatedAt = current.CreatedAt
-	if len(work.Messages) < len(current.Messages) {
-		return nil, invalidf("update: transcript must not be truncated")
-	}
-	if verifyPrefix {
-		for i := range current.Messages {
-			if !current.Messages[i].Equal(work.Messages[i]) {
-				return nil, invalidf("update: existing transcript is immutable; only append")
-			}
-		}
 	}
 	if now := time.Now().UTC(); now.After(current.UpdatedAt) {
 		work.UpdatedAt = now
 	} else {
 		work.UpdatedAt = current.UpdatedAt
 	}
-	if err := work.Validate(); err != nil {
+	data, err := marshalSession(work)
+	if err != nil {
 		return nil, err
 	}
-	if err := m.store.Save(ctx, work); err != nil {
+	if err := m.store.Save(ctx, id, data); err != nil {
 		return nil, err
 	}
-	return m.committed(ctx, work, id)
+	return work.Clone(), nil
 }
 
 // Append commits the given messages in order as one atomic batch at the end
-// of the transcript. An empty batch is rejected with ErrInvalidSession. It
-// shares the Update pipeline but skips the existing-transcript prefix scan,
-// since the mutator only appends.
+// of the transcript. An empty batch is rejected with ErrInvalidSession.
 func (m *Manager) Append(ctx context.Context, id string, messages ...models.Message) (*Session, error) {
 	if len(messages) == 0 {
 		return nil, invalidf("append: at least one message is required")
@@ -312,14 +299,13 @@ func (m *Manager) Append(ctx context.Context, id string, messages ...models.Mess
 			s.Messages = append(s.Messages, messages[i].Clone())
 		}
 		return nil
-	}, false)
+	})
 }
 
 // AppendAt commits messages only when len(transcript) equals at (optimistic
 // CAS-append). When the length has changed, it returns ErrConflict and leaves
 // the stored transcript unchanged. An empty batch or negative at is rejected
-// with ErrInvalidSession. Like Append, it skips the existing-transcript
-// prefix scan because the mutator only appends.
+// with ErrInvalidSession.
 func (m *Manager) AppendAt(ctx context.Context, id string, at int, messages ...models.Message) (*Session, error) {
 	if len(messages) == 0 {
 		return nil, invalidf("append: at least one message is required")
@@ -338,7 +324,7 @@ func (m *Manager) AppendAt(ctx context.Context, id string, at int, messages ...m
 			s.Messages = append(s.Messages, messages[i].Clone())
 		}
 		return nil
-	}, false)
+	})
 }
 
 // Delete removes the session, sharing the serialization boundary with all

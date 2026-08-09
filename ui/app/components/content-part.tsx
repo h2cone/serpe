@@ -1,40 +1,47 @@
-import type { ContentPart, Message } from "~/lib/types";
+import type { ContentPart, Message } from "~/lib/wire";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ToolIcon } from "./icons";
 
 export function ContentPartView({ part }: { part: ContentPart }) {
   switch (part.type) {
     case "text":
-      return <p className="whitespace-pre-wrap">{part.text}</p>;
+      return <MarkdownText text={part.text} />;
     case "reasoning_summary":
       return (
-        <details className="mb-2 text-xs text-slate-400">
-          <summary className="cursor-pointer">Thinking</summary>
-          <p className="mt-1 whitespace-pre-wrap">{part.text}</p>
+        <details className="thinking">
+          <summary>Thinking</summary>
+          <p>{part.text}</p>
         </details>
       );
     case "refusal":
-      return (
-        <p className="whitespace-pre-wrap text-amber-300">{part.text}</p>
-      );
+      return <p className="refusal">{part.text}</p>;
     case "tool_call":
       return (
         <ToolCallCard name={part.name} args={part.arguments} status="done" />
       );
     case "tool_result":
       return (
-        <div
-          className={`my-1 rounded-md border px-2 py-1 text-xs ${
-            part.is_error
-              ? "border-red-800 bg-red-950/40 text-red-200"
-              : "border-slate-700 bg-slate-950 text-slate-300"
-          }`}
-        >
-          <div className="font-mono text-[11px] text-slate-500">
-            result · {part.name}
+        <section className={`result-card${part.is_error ? " error" : ""}`}>
+          <div className="result-heading">
+            <span className="tool-glyph" aria-hidden="true">
+              <ToolIcon className="tool-icon" />
+            </span>
+            <span className="result-title">
+              <span className="result-label">Tool output</span>
+              <span className="result-name">{part.name}</span>
+            </span>
+            <span className="result-status">
+              <span className="status-dot" aria-hidden="true" />
+              {part.is_error ? "Failed" : "Complete"}
+            </span>
           </div>
-          {part.content.map((c, i) => (
-            <ContentPartView key={i} part={c} />
-          ))}
-        </div>
+          <div className="result-content">
+            {part.content.map((c, i) => (
+              <ContentPartView key={i} part={c} />
+            ))}
+          </div>
+        </section>
       );
     case "image": {
       const src =
@@ -44,12 +51,29 @@ export function ContentPartView({ part }: { part: ContentPart }) {
           : undefined);
       if (!src) return null;
       return (
-        <img src={src} alt="" className="my-1 max-h-64 rounded-md" />
+        <img src={src} alt="" className="content-image" />
       );
     }
     default:
       return null;
   }
+}
+
+function MarkdownText({ text }: { text: string }) {
+  return (
+    <div className="content-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ node: _node, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer" />
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 export function ToolCallCard({
@@ -72,35 +96,28 @@ export function ToolCallCard({
       : argsText || null;
 
   return (
-    <div
-      className={`my-1 rounded-md border px-2 py-1.5 text-xs ${
-        result?.is_error
-          ? "border-red-800 bg-red-950/30"
-          : "border-violet-900/50 bg-violet-950/20"
-      }`}
-    >
-      <div className="flex items-center gap-2 font-mono">
-        <span className="text-violet-300">{name}</span>
-        <span className="text-slate-500">
-          {status === "running" ? "running…" : "done"}
+    <section className={`tool-card${result?.is_error ? " error" : ""}`}>
+      <div className="tool-heading">
+        <span className="tool-glyph" aria-hidden="true">
+          <ToolIcon className="tool-icon" />
+        </span>
+        <span className="tool-name">{name}</span>
+        <span className="tool-status">
+          <span
+            className={`status-dot${status === "running" ? " is-running" : ""}`}
+            aria-hidden="true"
+          />
+          {status === "running" ? "Running" : "Complete"}
         </span>
       </div>
-      {argsDisplay && (
-        <pre className="mt-1 overflow-x-auto text-[11px] text-slate-400">
-          {argsDisplay}
-        </pre>
-      )}
+      {argsDisplay && <pre className="tool-args">{argsDisplay}</pre>}
       {result && (
-        <div
-          className={`mt-1 border-t border-slate-800 pt-1 ${
-            result.is_error ? "text-red-200" : "text-slate-300"
-          }`}
-        >
+        <div className={`tool-result${result.is_error ? " error" : ""}`}>
           {result.content.map((c, i) => (
             <ContentPartView key={i} part={c} />
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }

@@ -12,9 +12,11 @@
 // accidental concurrent commits fail with ErrConcurrentTurn (sessions.ErrConflict)
 // instead of silently forking the transcript.
 //
-// Stream terminal errors: after Next returns false, Turn.Err() is the singular
-// outcome to check (inner stream error, else commit failure). Session() is
-// non-nil only on successful commit. CommitErr is optional diagnostics only.
+// Stream terminal errors: before publishing run_end, Turn commits (or decides
+// not to commit), so observing that event no longer requires one extra Next.
+// Turn.Err() is the singular outcome to check (inner stream error, else commit
+// failure). Session() is non-nil only on successful commit. CommitErr is
+// optional diagnostics only.
 //
 // Session creation and ID generation are the caller's responsibility. This
 // package holds no cross-turn runner state; the Manager (and its Store) is the

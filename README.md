@@ -1,89 +1,161 @@
 # serpe
 
-An Agent Harness in Go. The harness owns the loop around the model: assemble
-context, stream a response, execute tool calls, append their results, and
-continue until done. Provider specifics stay behind a `models.Model` seam.
+Serpe is an agent harness. It owns the loop around a model: assembling
+context, streaming responses, executing tool calls, appending their results,
+and continuing until the run completes.
 
 ## Dependency graph
 
-```
-                      main.go          cmd/serpeserve
-                         │                   │
-              ┌──────────┴───────────────┐   │
-              │          │               │   ▼
-              agent ──► core/models ◄─── core/providers
-              │         │     ▲          │   │
-              │         │     │          │   ▼
-              │         │core/sessions   │ server ──► compose
-              │         │                │   │           │
-              ▼         ▼                │   └───────────┘
-             internal/jsonvalue ◄────────┘
-              ▲
-              │
-           compose ──► agent
-              │
-              └──► core/sessions
+```mermaid
+%%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
+flowchart TB
+    %% Entrypoints
+    ui["ui/ (React Router 7)"]
+    serve["cmd/serpeserve"]
+    cli["main.go"]
 
-  ui/ (React Router 7) ──HTTP/SSE──► server/
+    %% Application seams and runtime modules
+    server["server"]
+    compose["compose"]
+    bootstrap["internal/bootstrap"]
+    sessions["core/sessions"]
+    agent["agent"]
+    providers["core/providers"]
+
+    %% Provider internals
+    drivers["core/providers/internal/driver/{builtin, official}"]
+    protocols["core/providers/internal/protocol/{anthropic, google, openai}"]
+    transports["core/providers/internal/transport/{httpx, sse, sdkhttp}"]
+    shared["core/providers/internal/shared"]
+
+    %% Shared contracts and leaf utilities
+    models["core/models"]
+    jsonvalue["internal/jsonvalue"]
+
+    cli --> bootstrap
+    cli --> agent
+    serve --> bootstrap
+    serve --> server
+    ui -.->|HTTP / SSE| server
+
+    bootstrap --> agent
+    bootstrap --> providers
+    server --> compose
+    compose --> agent
+    compose --> sessions
+
+    agent --> models
+    agent --> jsonvalue
+    sessions --> models
+    providers --> models
+    providers --> drivers
+    providers --> shared
+    providers --> transports
+
+    drivers --> protocols
+    drivers --> shared
+    drivers --> transports
+    protocols --> shared
+    protocols --> transports
+    transports --> shared
+    shared --> models
+    shared --> jsonvalue
+    models --> jsonvalue
 ```
+
+Solid arrows show the primary Go dependency paths. Direct imports already
+represented transitively are omitted for readability. The dotted arrow marks
+the UI's HTTP/SSE boundary.
 
 `agent` never imports `core/sessions` or `core/providers`. `compose` is the
 application seam that joins `agent.Runner` with `sessions.Manager` for a
-single turn boundary. `server` exposes REST + SSE over `compose`/`sessions`.
-`internal/jsonvalue` is a leaf shared by `core/models`, `agent`, and the
-providers' `internal/shared`.
+single turn boundary. `server` receives one `agent.Runner`/`sessions.Manager`
+pair and constructs that seam itself, so CRUD operations and turns cannot be
+wired to different stores. `internal/bootstrap` owns provider/model/tool
+construction shared by both commands. `internal/jsonvalue` is a leaf used by
+`core/models`, `agent`, `server`, and `core/providers/internal/shared`.
 
 ## Modules
 
 ### `core/models`
 
-```
-core/models ──► internal/jsonvalue
-├─ Request / Response / Event (streaming)
-├─ Tool / ToolCall / ToolChoice
-├─ Model (invocation interface)
-└─ Content: Validate · CanonicalBytes · Equal
+Defines `Request`, `Response`, and the streaming `Event` type; `Tool`,
+`ToolCall`, and `ToolChoice`; the `Model` invocation interface; and `Content`
+validation, canonical encoding, and equality.
+
+Provider-neutral request construction:
+
+```go
+request := models.NewTextRequest("Summarize this repository.")
+request.Instructions = []models.Instruction{{
+    Role: models.InstructionDeveloper,
+    Text: "Answer in three concise bullets.",
+}}
+request.Generation.MaxOutputTokens = models.Some(300)
+if err := request.Validate(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ### `core/providers`
 
-```
-core/providers
-└─ internal/
-   ├─ driver/{builtin, official}           ─┐
-   ├─ protocol/{anthropic, google, openai} ─┤
-   ├─ shared ──► internal/jsonvalue        ─┤
-   └─ transport/{httpx, sse, sdkhttp}      ─┤
-                                            ▼
-                                            core/models
+Contains built-in and official SDK drivers; Anthropic, Google, and OpenAI
+protocol codecs; shared provider helpers; and HTTP, SSE, and SDK transports.
+
+Minimal OpenAI Responses call (with `OPENAI_API_KEY` set):
+
+```go
+provider, err := providers.New(providers.Config{
+    Protocol: providers.OpenAIResponses,
+    APIKey:   os.Getenv("OPENAI_API_KEY"),
+})
+if err != nil {
+    log.Fatal(err)
+}
+model, err := provider.Model("gpt-4.1-mini")
+if err != nil {
+    log.Fatal(err)
+}
+response, err := model.Complete(
+    context.Background(),
+    models.NewTextRequest("Say hello in one sentence."),
+)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(response.Text())
 ```
 
 ### `agent`
 
-```
-agent ──► core/models
-  │
-  └──► internal/jsonvalue
-├─ Runner: Run · Stream
-├─ Tool / ToolOutput / Limits
-├─ Event: run_start · model_start · model_event · model_end
-          · tool_start · tool_end · run_end
-└─ outcome: err == nil && Result.Completed()  committable
-            budget/stall stops                nil err + StopReason
-            failure                           sentinel / *models.Error
-                                              / ctx err + partial Result
+Provides `Runner.Run` and `Runner.Stream`, `Tool`, `ToolOutput`, limits, and
+run, model, and tool lifecycle events. A completed result with a nil error is
+committable; budget or stall stops return a nil error with a `StopReason`.
+Failures after a run starts return a partial result together with a sentinel
+error, a `*models.Error`, or a context error; request-validation failures
+return no result.
+
+Minimal blocking run (with a `models.Model` and an `agent.Tool`
+implementation):
+
+```go
+runner, _ := agent.NewRunner(agent.Config{
+    Model: model,
+    Tools: []agent.Tool{now},
+})
+result, err := runner.Run(ctx, models.NewTextRequest("What time is it?"))
+if err == nil && result.Completed() {
+    fmt.Println(result.Text())
+}
 ```
 
 ### `core/sessions`
 
-```
-core/sessions ──► core/models
-├─ Session
-├─ Store ◄── MemoryStore
-│         ◄── FileStore   (disk: <root>/<id>.json, temp+rename)
-└─ Manager: Create · Get · List · Fork · Update · Append · AppendAt · Delete
-```
-
+Provides `Session`; a `Manager` for validation, a versioned record codec,
+per-ID transactions, CRUD operations, forking, metadata changes, and appends;
+and opaque byte records through `MemoryStore` or `FileStore`. The file store
+writes `<root>/<id>.json` through a same-directory temporary file and atomic
+publish.
 
 Minimal use (in-process):
 
@@ -96,62 +168,81 @@ _, _ = manager.Append(ctx, created.ID,
 )
 ```
 
-Disk-backed store (process restart recovery; single process):
+Disk-backed store (persistent across restarts; single-process use):
 
 ```go
+// The root directory must already exist and be writable.
 store, _ := sessions.NewFileStore("/var/lib/serpe/sessions")
 manager, _ := sessions.NewManager(store)
-// Session IDs must be filesystem-safe: [A-Za-z0-9._-], not Windows device names.
 ```
+
+Session IDs contain 1–128 ASCII characters from `[A-Za-z0-9._-]`; `.` and
+`..`, as well as Windows reserved device names, are not allowed.
+
+Custom `Store` implementations persist opaque `[]byte` records keyed by ID
+and must not decode `Session`; `Manager` owns the versioned payload. Session
+changes use intent-specific methods such as `SetCWD`, `PatchMetadata`,
+`Append`, and `AppendAt`; there is no public arbitrary-mutation `Update`
+method.
 
 ### `compose`
 
-```
-compose ──► agent
-       ──► core/sessions
-       ──► core/models
-├─ TurnService: Send · Stream
-└─ Turn (stream decorator): Next · Event · Err · Result · Session
-```
+Provides `TurnService.Send` and `TurnService.Stream`, plus the `Turn` stream
+wrapper with `Next`, `Event`, `Err`, `Result`, `Session`, `CommitErr`, and
+`Close`.
 
-Turn boundary: Get → build request → Run/Stream → commit suffix only when
+Turn boundary: `Get` → build request → `Run`/`Stream` → commit suffix only when
 `err == nil && result.Completed()`, via `Manager.AppendAt` (optimistic length
-CAS; `ErrConcurrentTurn` / `sessions.ErrConflict` on conflict). After stream
-exhaust, `Turn.Err()` is the singular terminal check (includes commit failure).
-Close never commits.
+compare-and-swap). A conflict returns `ErrConcurrentTurn`, an alias of
+`sessions.ErrConflict`. For streaming runs, the commit decision occurs before
+`run_end` is published, so callers do not need an extra `Next()` call to
+persist the result. After observing `run_end` or exhausting the stream, callers
+use `Turn.Err()` to check terminal errors, including commit failures.
+`Turn.Close()` never commits.
 
 ```go
 svc, _ := compose.New(compose.Config{Runner: runner, Manager: manager})
-result, committed, err := svc.Send(ctx, "sess-1", "What is in this repo?")
+result, session, err := svc.Send(ctx, "sess-1", "What is in this repo?")
 // or: turn, _ := svc.Stream(ctx, "sess-1", prompt); for turn.Next() { ... }
 ```
 
 ### `server` + `cmd/serpeserve`
 
+The server exposes `GET /api/health`; `GET` and `POST` on `/api/sessions`;
+`GET`, `PATCH`, and `DELETE` on `/api/sessions/{id}`;
+`POST /api/sessions/{id}/fork`; and `POST /api/runs`. The runs endpoint returns
+a `text/event-stream` backed by `TurnService.Stream`.
+
+`server.New` takes one `agent.Runner` and one `sessions.Manager`, then
+constructs its own `TurnService`, ensuring that CRUD operations and runs use
+the same store. The runs endpoint opens the turn—and therefore loads the
+session—before writing SSE headers, so lookup and request-validation errors
+can still be returned as JSON. The executable TypeScript contract in
+`ui/app/lib/wire.ts` validates SSE frames and session REST DTOs at the browser
+boundary. Go and TypeScript tests consume the same concrete fixtures under
+`server/testdata`.
+
+```go
+srv, _ := server.New(server.Config{
+    Runner: runner, Manager: manager, CWD: "/work",
+})
 ```
-server ──► compose · agent · core/sessions · core/models
-  GET  /api/health
-  CRUD /api/sessions[/{id}[/fork]]
-  POST /api/runs  → text/event-stream (TurnService.Stream)
-```
+
+The Go CLI and API server read `OPENAI_API_KEY`; `OPENAI_BASE_URL` and
+`OPENAI_DEFAULT_MODEL` are optional.
 
 ```bash
-# API (default MemoryStore; set SERPE_SESSIONS_DIR for FileStore)
+# API (:8080 by default; MemoryStore unless SERPE_SESSIONS_DIR is set)
 go run ./cmd/serpeserve   # :8080
 
-# UI (dev; proxies /api → :8080)
+# UI development server (proxies /api to http://127.0.0.1:8080 by default)
 cd ui && npm install && npm run dev
 ```
 
 ### `main.go`
 
-```
-main.go ─┬─► agent
-         ├─► core/models
-         └─► core/providers
-```
-
-CLI wiring and rendering only; the model-tool loop lives in package `agent`.
+Handles CLI arguments and event rendering; shared provider/model/tool wiring
+lives in `internal/bootstrap`, while the model-tool loop lives in `agent`.
 
 ## License
 

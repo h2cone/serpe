@@ -1,20 +1,6 @@
-import type { SSEFrame } from "./types";
+import { decodeSSEFrame, type SSEFrame } from "./wire";
 
-const KNOWN_FRAME_TYPES = new Set([
-  "run_start",
-  "model_start",
-  "part_start",
-  "delta",
-  "part_end",
-  "tool_start",
-  "tool_end",
-  "model_end",
-  "run_end",
-  "error",
-  "done",
-]);
-
-/** Narrow JSON into SSEFrame; unknown t or non-objects are dropped. */
+/** Parse JSON and apply the executable wire contract. */
 function parseFrame(raw: string): SSEFrame | null {
   let v: unknown;
   try {
@@ -22,10 +8,7 @@ function parseFrame(raw: string): SSEFrame | null {
   } catch {
     return null;
   }
-  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
-  const t = (v as { t?: unknown }).t;
-  if (typeof t !== "string" || !KNOWN_FRAME_TYPES.has(t)) return null;
-  return v as SSEFrame;
+  return decodeSSEFrame(v);
 }
 
 /** Parse an SSE byte stream into frames (data: JSON lines). */

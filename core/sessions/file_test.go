@@ -48,10 +48,11 @@ func TestFileStoreRoundTrip(t *testing.T) {
 			}(),
 		},
 	}
-	if err := store.Create(ctx, s); err != nil {
+	mgr := mustManager(t, store)
+	if _, err := mgr.Create(ctx, s); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Load(ctx, "sess-1")
+	got, err := mgr.Get(ctx, "sess-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,20 +86,12 @@ func TestFileStorePathSafety(t *testing.T) {
 		"",
 	}
 	for _, id := range bad {
-		s := New("placeholder", "/w")
-		s.ID = id
-		// Some IDs fail Session.Validate first; either way Create must not succeed.
-		err := store.Create(ctx, s)
+		err := store.Create(ctx, id, []byte("opaque"))
 		if err == nil {
 			t.Fatalf("Create(%q) succeeded", id)
 		}
 		if !errors.Is(err, ErrInvalidSession) {
-			// empty ID fails Validate with ErrInvalidSession; path-unsafe with valid
-			// shape also wraps ErrInvalidSession. Accept any non-nil error that is
-			// not a successful write — but prefer ErrInvalidSession when validID passes.
-			if validID(id) && !errors.Is(err, ErrInvalidSession) {
-				t.Fatalf("Create(%q) = %v, want ErrInvalidSession", id, err)
-			}
+			t.Fatalf("Create(%q) = %v, want ErrInvalidSession", id, err)
 		}
 	}
 	// Confirm no stray files for separator-based IDs.
@@ -117,7 +110,7 @@ func TestFileStoreOrphanTmpIgnoredByLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Create(ctx, New("s1", "/w")); err != nil {
+	if err := store.Create(ctx, "s1", []byte("committed")); err != nil {
 		t.Fatal(err)
 	}
 	// Plant an orphan tmp that would look like a partial write.
@@ -129,8 +122,8 @@ func TestFileStoreOrphanTmpIgnoredByLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CWD != "/w" {
-		t.Fatalf("Load used orphan tmp: CWD = %q", got.CWD)
+	if string(got) != "committed" {
+		t.Fatalf("Load used orphan tmp: %q", got)
 	}
 	// Load must not delete the active/orphan tmp (cleanup is not on Load).
 	if _, err := os.Stat(orphan); err != nil {
@@ -159,15 +152,14 @@ func TestFileStoreSaveCleansOtherTmp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Create(ctx, New("s1", "/w")); err != nil {
+	if err := store.Create(ctx, "s1", []byte("one")); err != nil {
 		t.Fatal(err)
 	}
 	orphan := filepath.Join(root, "s1.stale.tmp")
 	if err := os.WriteFile(orphan, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := New("s1", "/w2")
-	if err := store.Save(ctx, s); err != nil {
+	if err := store.Save(ctx, "s1", []byte("two")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
@@ -183,7 +175,7 @@ func TestFileStoreLoadDoesNotDeleteActiveTmp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Create(ctx, New("s1", "/w")); err != nil {
+	if err := store.Create(ctx, "s1", []byte("one")); err != nil {
 		t.Fatal(err)
 	}
 	active := filepath.Join(root, "s1.writing.tmp")
@@ -208,7 +200,8 @@ func TestFileStoreCorruptJSON(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "s1.json"), []byte(`{not json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Load(ctx, "s1")
+	mgr := mustManager(t, store)
+	_, err = mgr.Get(ctx, "s1")
 	if !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("corrupt Load = %v, want ErrInvalidSession", err)
 	}
@@ -227,9 +220,7 @@ func TestFileStoreConcurrentCreateSameID(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			s := New("same-id", "/w")
-			s.Metadata = map[string]string{"i": string(rune('0' + i%10))}
-			errCh <- store.Create(ctx, s)
+			errCh <- store.Create(ctx, "same-id", []byte{byte('0' + i%10)})
 		}(i)
 	}
 	wg.Wait()
@@ -253,8 +244,8 @@ func TestFileStoreConcurrentCreateSameID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "same-id" || got.CWD != "/w" {
-		t.Fatalf("loaded session: %+v", got)
+	if len(got) != 1 {
+		t.Fatalf("loaded record: %q", got)
 	}
 }
 
@@ -264,8 +255,7 @@ func TestFileStoreConcurrentLoadDuringSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := New("s1", "/w")
-	if err := store.Create(ctx, base); err != nil {
+	if err := store.Create(ctx, "s1", []byte("0")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -276,9 +266,7 @@ func TestFileStoreConcurrentLoadDuringSave(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < n; i++ {
-			s := New("s1", "/w")
-			s.Metadata = map[string]string{"i": string(rune('0' + i%10))}
-			if err := store.Save(ctx, s); err != nil {
+			if err := store.Save(ctx, "s1", []byte{byte('0' + i%10)}); err != nil {
 				errCh <- err
 				return
 			}
@@ -293,7 +281,7 @@ func TestFileStoreConcurrentLoadDuringSave(t *testing.T) {
 				errCh <- err
 				return
 			}
-			if got.ID != "s1" || got.CWD != "/w" {
+			if len(got) != 1 || got[0] < '0' || got[0] > '9' {
 				errCh <- errors.New("torn or invalid load")
 			}
 		}()

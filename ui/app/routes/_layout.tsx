@@ -1,7 +1,14 @@
-import { Form, Link, Outlet, useLoaderData, useNavigation } from "react-router";
-import type { Route } from "./+types/_layout";
+import {
+  Form,
+  Link,
+  NavLink,
+  Outlet,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 import { api } from "~/lib/api";
-import type { SessionSummary } from "~/lib/types";
+import type { SessionSummary } from "~/lib/wire";
+import { BrandMark, PlusIcon } from "~/components/icons";
 
 export async function loader() {
   try {
@@ -15,43 +22,41 @@ export async function loader() {
   }
 }
 
-export async function action({ request }: Route.ActionArgs) {
-  const form = await request.formData();
-  const intent = String(form.get("intent") ?? "create");
-  if (intent === "create") {
-    const created = await api.createSession();
-    return Response.redirect(`/sessions/${created.id}`, 303);
-  }
-  return null;
-}
-
 export default function Layout() {
   const { sessions, error } = useLoaderData<typeof loader>();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
   return (
-    <div className="shell h-full">
-      <aside className="sidebar flex flex-col gap-3 bg-slate-950/80">
-        <div className="flex items-center justify-between gap-2">
-          <Link to="/" className="text-sm font-semibold tracking-wide text-sky-300">
-            serpe
+    <div className="shell">
+      <aside className="sidebar">
+        <div className="brand-row">
+          <Link to="/" className="brand" aria-label="serpe home">
+            <BrandMark className="brand-mark" />
+            <span className="brand-wordmark">serpe</span>
           </Link>
-          <Form method="post">
-            <input type="hidden" name="intent" value="create" />
+          <Form method="post" action="/sessions/new">
             <button
               type="submit"
               disabled={busy}
-              className="rounded-md bg-sky-600 px-2 py-1 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+              className="new-button"
+              aria-busy={busy}
             >
-              New
+              <PlusIcon className="button-icon" />
+              {busy ? "Creating…" : "New"}
             </button>
           </Form>
         </div>
         {error && (
-          <p className="text-xs text-amber-400">API offline: {error}</p>
+          <p className="api-error">API offline: {error}</p>
         )}
-        <SessionList sessions={sessions} />
+        <nav className="session-nav" aria-label="Sessions">
+          <div className="session-nav-heading">
+            <span>Sessions</span>
+            <span>{sessions.length}</span>
+          </div>
+          <SessionList sessions={sessions} />
+        </nav>
       </aside>
       <main className="main min-h-0">
         <Outlet />
@@ -63,25 +68,27 @@ export default function Layout() {
 function SessionList({ sessions }: { sessions: SessionSummary[] }) {
   if (sessions.length === 0) {
     return (
-      <p className="text-xs text-slate-500">No sessions yet. Create one.</p>
+      <p className="session-empty">No sessions yet. Create one.</p>
     );
   }
   return (
-    <ul className="flex flex-col gap-1">
+    <ul className="session-list">
       {sessions.map((s) => (
         <li key={s.id}>
-          <Link
+          <NavLink
             to={`/sessions/${s.id}`}
-            className="block rounded-md px-2 py-1.5 text-sm hover:bg-slate-800"
+            className={({ isActive }) =>
+              `session-link${isActive ? " is-active" : ""}`
+            }
             prefetch="intent"
           >
-            <div className="truncate font-medium text-slate-100">
-              {s.title || s.preview || s.id}
+            <div className="session-title">{s.title || s.preview || s.id}</div>
+            <div className="session-meta">
+              {s.message_count} {s.message_count === 1 ? "message" : "messages"}
+              <span aria-hidden="true"> · </span>
+              {s.id.slice(0, 8)}
             </div>
-            <div className="truncate text-[11px] text-slate-500">
-              {s.message_count} msgs · {s.id.slice(0, 8)}
-            </div>
-          </Link>
+          </NavLink>
         </li>
       ))}
     </ul>

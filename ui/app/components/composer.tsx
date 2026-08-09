@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { SendIcon, StopIcon } from "./icons";
 
 export function Composer({
   streaming,
@@ -10,9 +11,19 @@ export function Composer({
   onStop: () => void;
 }) {
   const [value, setValue] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const canSend = value.trim().length > 0 && !streaming;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [value]);
+
   return (
     <form
-      className="border-t border-slate-800 p-3"
+      className="composer-shell"
       onSubmit={(e) => {
         e.preventDefault();
         const v = value.trim();
@@ -21,8 +32,9 @@ export function Composer({
         onSend(v);
       }}
     >
-      <div className="mx-auto flex max-w-3xl gap-2">
+      <div className="composer-box">
         <textarea
+          ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
@@ -31,27 +43,36 @@ export function Composer({
               e.currentTarget.form?.requestSubmit();
             }
           }}
-          rows={2}
+          rows={1}
           disabled={streaming}
-          placeholder={streaming ? "Streaming…" : "Message (Enter to send)"}
-          className="min-h-[2.5rem] flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none ring-sky-600 focus:ring-1 disabled:opacity-60"
+          aria-label="Message"
+          placeholder={streaming ? "serpe is responding…" : "Message serpe…"}
+          className="composer-textarea"
         />
-        {streaming ? (
-          <button
-            type="button"
-            onClick={onStop}
-            className="rounded-xl bg-slate-700 px-4 text-sm font-medium hover:bg-slate-600"
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            type="submit"
-            className="rounded-xl bg-sky-600 px-4 text-sm font-medium text-white hover:bg-sky-500"
-          >
-            Send
-          </button>
-        )}
+        <div className="composer-footer">
+          <span className="composer-hint">Enter to send · Shift + Enter for a new line</span>
+          {streaming ? (
+            <button
+              type="button"
+              onClick={onStop}
+              className="stop-button"
+              aria-label="Stop response"
+              title="Stop response"
+            >
+              <StopIcon className="button-icon" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="send-button"
+              disabled={!canSend}
+              aria-label="Send message"
+              title="Send message"
+            >
+              <SendIcon className="button-icon" />
+            </button>
+          )}
+        </div>
       </div>
     </form>
   );

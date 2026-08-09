@@ -1,16 +1,14 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
 	"testing"
-
-	"github.com/h2cone/serpe/core/models"
 )
 
-// storeFactory builds a fresh Store for contract tests. FileStore factories
-// typically use t.TempDir().
+// storeFactory builds a fresh opaque-record backend for contract tests.
 type storeFactory func(t *testing.T) Store
 
 func TestStoreContract_Memory(t *testing.T) {
@@ -51,10 +49,10 @@ func contractList(t *testing.T, store Store) {
 	if len(empty) != 0 {
 		t.Fatalf("List empty len=%d, want 0", len(empty))
 	}
-	if err := store.Create(ctx, New("a", "/wd")); err != nil {
+	if err := store.Create(ctx, "a", []byte("one")); err != nil {
 		t.Fatalf("Create a: %v", err)
 	}
-	if err := store.Create(ctx, New("b", "/wd")); err != nil {
+	if err := store.Create(ctx, "b", []byte("two")); err != nil {
 		t.Fatalf("Create b: %v", err)
 	}
 	got, err := store.List(ctx)
@@ -64,21 +62,20 @@ func contractList(t *testing.T, store Store) {
 	if len(got) != 2 {
 		t.Fatalf("List len=%d, want 2", len(got))
 	}
-	ids := map[string]bool{}
-	for _, s := range got {
-		ids[s.ID] = true
-		// Ownership: mutate returned snapshot must not affect store.
-		s.CWD = "/mutated"
+	records := make(map[string]string, len(got))
+	for i := range got {
+		records[got[i].ID] = string(got[i].Data)
+		got[i].Data[0] = 'x'
 	}
-	if !ids["a"] || !ids["b"] {
-		t.Fatalf("List ids=%v, want a and b", ids)
+	if records["a"] != "one" || records["b"] != "two" {
+		t.Fatalf("List records=%v", records)
 	}
 	loaded, err := store.Load(ctx, "a")
 	if err != nil {
-		t.Fatalf("Load after List mutate: %v", err)
+		t.Fatal(err)
 	}
-	if loaded.CWD != "/wd" {
-		t.Fatalf("store polluted after List mutate: CWD=%q", loaded.CWD)
+	if string(loaded) != "one" {
+		t.Fatalf("List exposed backend bytes: %q", loaded)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -90,31 +87,25 @@ func contractList(t *testing.T, store Store) {
 func contractLifecycle(t *testing.T, store Store) {
 	t.Helper()
 	ctx := context.Background()
-	s := New("s1", "/wd")
-	if err := store.Create(ctx, s); err != nil {
+	if err := store.Create(ctx, "s1", []byte("one")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := store.Create(ctx, New("s1", "/other")); !errors.Is(err, ErrAlreadyExists) {
+	if err := store.Create(ctx, "s1", []byte("other")); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("duplicate Create = %v, want ErrAlreadyExists", err)
 	}
 	got, err := store.Load(ctx, "s1")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	if err != nil || string(got) != "one" {
+		t.Fatalf("Load = %q, %v", got, err)
 	}
-	if got.CWD != "/wd" {
-		t.Fatalf("Load CWD = %q", got.CWD)
-	}
-	updated := got.Clone()
-	updated.CWD = "/new"
-	if err := store.Save(ctx, updated); err != nil {
+	if err := store.Save(ctx, "s1", []byte("two")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := store.Save(ctx, New("missing", "/w")); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Save of missing = %v, want ErrNotFound", err)
+	if err := store.Save(ctx, "missing", []byte("x")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Save missing = %v, want ErrNotFound", err)
 	}
 	got, _ = store.Load(ctx, "s1")
-	if got.CWD != "/new" {
-		t.Fatalf("after Save CWD = %q, want /new", got.CWD)
+	if string(got) != "two" {
+		t.Fatalf("after Save = %q, want two", got)
 	}
 	if err := store.Delete(ctx, "s1"); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -130,33 +121,28 @@ func contractLifecycle(t *testing.T, store Store) {
 func contractOwnership(t *testing.T, store Store) {
 	t.Helper()
 	ctx := context.Background()
-	in := New("s1", "/wd")
-	if err := store.Create(ctx, in); err != nil {
+	input := []byte("one")
+	if err := store.Create(ctx, "s1", input); err != nil {
 		t.Fatal(err)
 	}
-	in.CWD = "/mutated"
+	input[0] = 'x'
 	got, err := store.Load(ctx, "s1")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || string(got) != "one" {
+		t.Fatalf("Create retained caller bytes: %q, %v", got, err)
 	}
-	if got.CWD != "/wd" {
-		t.Fatalf("Create retained input storage: CWD = %q", got.CWD)
-	}
-	got.CWD = "/mutated"
-	got.Metadata = map[string]string{"title": "x"}
+	got[0] = 'x'
 	again, _ := store.Load(ctx, "s1")
-	if again.CWD != "/wd" || again.Metadata != nil {
-		t.Fatal("Load exposed internal storage")
+	if string(again) != "one" {
+		t.Fatalf("Load exposed backend bytes: %q", again)
 	}
-	saved := New("s1", "/wd")
-	saved.Messages = append(saved.Messages, models.NewUserMessage(models.Text("hi")))
-	if err := store.Save(ctx, saved); err != nil {
+	saved := []byte("two")
+	if err := store.Save(ctx, "s1", saved); err != nil {
 		t.Fatal(err)
 	}
-	saved.Messages[0].Content[0].Text.Text = "mutated"
+	saved[0] = 'x'
 	check, _ := store.Load(ctx, "s1")
-	if check.Messages[0].Content[0].Text.Text != "hi" {
-		t.Fatal("Save retained input storage")
+	if !bytes.Equal(check, []byte("two")) {
+		t.Fatalf("Save retained caller bytes: %q", check)
 	}
 }
 
@@ -164,10 +150,9 @@ func contractContextCanceled(t *testing.T, store Store) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := store.Create(ctx, New("s1", "/wd")); !errors.Is(err, context.Canceled) {
+	if err := store.Create(ctx, "s1", []byte("one")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create canceled = %v", err)
 	}
-	// Ensure nothing was written: open a live context for Load.
 	if _, err := store.Load(context.Background(), "s1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("canceled Create left state: %v", err)
 	}
@@ -175,8 +160,7 @@ func contractContextCanceled(t *testing.T, store Store) {
 
 func contractInvalidID(t *testing.T, store Store) {
 	t.Helper()
-	_, err := store.Load(context.Background(), " ")
-	if !errors.Is(err, ErrInvalidSession) {
+	if _, err := store.Load(context.Background(), " "); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("Load invalid ID = %v, want ErrInvalidSession", err)
 	}
 }
@@ -186,28 +170,28 @@ func contractConcurrentCreate(t *testing.T, store Store) {
 	ctx := context.Background()
 	const n = 16
 	var wg sync.WaitGroup
-	errCh := make(chan error, n)
+	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- store.Create(ctx, New("s1", "/wd"))
+			errs <- store.Create(ctx, "s1", []byte("one"))
 		}()
 	}
 	wg.Wait()
-	close(errCh)
-	var okN, existsN int
-	for err := range errCh {
+	close(errs)
+	var succeeded, existed int
+	for err := range errs {
 		switch {
 		case err == nil:
-			okN++
+			succeeded++
 		case errors.Is(err, ErrAlreadyExists):
-			existsN++
+			existed++
 		default:
 			t.Fatalf("Create = %v", err)
 		}
 	}
-	if okN != 1 || existsN != n-1 {
-		t.Fatalf("want 1 ok + %d already-exists, got ok=%d exists=%d", n-1, okN, existsN)
+	if succeeded != 1 || existed != n-1 {
+		t.Fatalf("want 1 success + %d conflicts, got %d + %d", n-1, succeeded, existed)
 	}
 }

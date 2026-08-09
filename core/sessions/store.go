@@ -2,26 +2,29 @@ package sessions
 
 import "context"
 
-// Store persists session snapshots. Each call must be concurrency-safe with
-// atomic visibility, must obey the package deep-copy rules, and must leave no
-// half-applied state visible when it returns an error. Create only inserts,
-// Save only replaces an existing record; neither uses fuzzy upsert semantics.
-// Stores validate their input themselves and must not modify state if the
-// context is already canceled.
+// Record is one opaque, versioned session payload stored under ID. Store
+// implementations copy Data at their boundary; only Manager interprets it.
+type Record struct {
+	ID   string
+	Data []byte
+}
+
+// Store persists opaque records. Implementations own storage mechanics only:
+// concurrency, atomic visibility, byte ownership, context handling, and
+// create-vs-replace semantics. Session fields, validation, cloning, and the
+// record codec belong to Manager and are deliberately absent from this seam.
 type Store interface {
-	// Create inserts the session, failing with ErrAlreadyExists if the ID
-	// exists.
-	Create(ctx context.Context, session *Session) error
-	// Load returns an independent snapshot, failing with ErrNotFound if the
-	// ID does not exist.
-	Load(ctx context.Context, id string) (*Session, error)
-	// Save replaces the stored record with the given snapshot, failing with
-	// ErrNotFound if the ID does not exist.
-	Save(ctx context.Context, session *Session) error
-	// Delete removes the session, failing with ErrNotFound if the ID does not
+	// Create inserts data under id, failing with ErrAlreadyExists if id exists.
+	Create(ctx context.Context, id string, data []byte) error
+	// Load returns an independent byte slice, failing with ErrNotFound if id
+	// does not exist.
+	Load(ctx context.Context, id string) ([]byte, error)
+	// Save replaces data under id, failing with ErrNotFound if id does not
 	// exist.
+	Save(ctx context.Context, id string, data []byte) error
+	// Delete removes the record, failing with ErrNotFound if id does not exist.
 	Delete(ctx context.Context, id string) error
-	// List returns independent snapshots of every stored session. Order is
+	// List returns independent records for every stored ID. Order is
 	// undefined; callers that need a stable order must sort themselves.
-	List(ctx context.Context) ([]*Session, error)
+	List(ctx context.Context) ([]Record, error)
 }

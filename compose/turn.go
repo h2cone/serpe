@@ -65,16 +65,18 @@ func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*agen
 }
 
 // Stream starts a streaming turn. The returned Turn wraps the inner
-// agent.Stream and runs the same commit transaction once when the stream is
-// naturally exhausted and the run completed. Close does not commit.
+// agent.Stream and runs the same commit transaction once before publishing a
+// terminal run_end event. As a fallback for streams that end without run_end,
+// it also finalizes on natural exhaustion. Close does not commit.
 //
 // Stream commit reuses the caller's context while it is still live (deadlines
 // and cancellation apply). If the context is already canceled when commit
 // runs—common after a successful drain when the caller canceled the stream
 // ctx—commit uses context.WithoutCancel so a clean run is still persisted.
 //
-// After Next returns false, Err() is the singular terminal check (inner error
-// else commit failure). Session() is non-nil only when commit succeeded.
+// Once run_end has been observed (or Next returns false), Err() is the
+// singular terminal check (inner error else commit failure). Session() is
+// non-nil only when commit succeeded.
 func (s *TurnService) Stream(ctx context.Context, sessionID, prompt string) (*Turn, error) {
 	tx, err := s.begin(ctx, sessionID, prompt)
 	if err != nil {
@@ -125,12 +127,12 @@ func (tx *turnTxn) commit(ctx context.Context, result *agent.Result) (*sessions.
 	return tx.svc.mgr.AppendAt(ctx, tx.id, tx.pre, suffix...)
 }
 
-// Turn decorates agent.Stream with session commit on natural exhaustion.
+// Turn decorates agent.Stream with session commit at its terminal boundary.
 // One Turn has one drain loop (same single-reader rule as agent.Stream).
 //
-// Prefer Err() after drain for the singular outcome. CommitErr is a diagnostic
-// side-channel only (when both inner and commit fail, Err prefers the inner
-// error).
+// Prefer Err() once run_end is observed (or after drain) for the singular
+// outcome. CommitErr is a diagnostic side-channel only (when both inner and
+// commit fail, Err prefers the inner error).
 type Turn struct {
 	inner agent.Stream
 	tx    *turnTxn
@@ -142,20 +144,29 @@ type Turn struct {
 	commitErr error
 }
 
-// Next advances the inner stream. On the first false from a natural exhaust,
-// it runs the commit decision once.
+// Next advances the inner stream. Before it exposes run_end, it runs the
+// commit decision once, so observing the terminal event implies persistence
+// has already been decided. Natural exhaustion is a fallback for inner stream
+// implementations that do not emit run_end.
 func (t *Turn) Next() bool {
 	if t.inner.Next() {
+		if t.inner.Event().Kind == agent.EventRunEnd {
+			t.finish()
+		}
 		return true
 	}
+	t.finish()
+	return false
+}
+
+func (t *Turn) finish() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.done {
-		return false
+		return
 	}
 	t.done = true
 	t.tryCommitLocked()
-	return false
 }
 
 // tryCommitLocked runs the commit decision. Caller must hold t.mu.
@@ -188,9 +199,9 @@ func streamCommitContext(ctx context.Context) context.Context {
 func (t *Turn) Event() agent.Event { return t.inner.Event() }
 
 // Err returns the terminal turn error: the inner stream error if any,
-// otherwise a commit failure. After Next returns false, Err() != nil means
-// nothing was committed. Result() remains available so callers can inspect
-// the run or retry commit themselves.
+// otherwise a commit failure. Once run_end is observed or Next returns false,
+// Err() != nil means nothing was committed. Result() remains available so
+// callers can inspect the run or retry commit themselves.
 func (t *Turn) Err() error {
 	if err := t.inner.Err(); err != nil {
 		return err

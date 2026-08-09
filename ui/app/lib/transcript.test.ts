@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyFrame, appendUser, initialTranscript } from "./transcript";
-import type { SSEFrame } from "./types";
+import type { SSEFrame } from "./wire";
 
 function applyAll(frames: SSEFrame[]) {
   let s = initialTranscript();

@@ -9,16 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/h2cone/serpe/agent"
 	"github.com/h2cone/serpe/compose"
 	"github.com/h2cone/serpe/core/sessions"
 )
 
 // Config constructs a Server.
 type Config struct {
-	Turns   *compose.TurnService // required: runs path
-	Manager *sessions.Manager    // required: session CRUD
-	CWD     string               // default cwd for new sessions; required non-empty
-	NewID   func() string        // optional session ID generator
+	Runner  *agent.Runner     // required: agent execution
+	Manager *sessions.Manager // required: sessions and turn persistence
+	CWD     string            // default cwd for new sessions; required non-empty
+	NewID   func() string     // optional session ID generator
 }
 
 // Server is the HTTP surface for sessions and streaming runs.
@@ -31,8 +32,8 @@ type Server struct {
 
 // New validates cfg and returns a Server.
 func New(cfg Config) (*Server, error) {
-	if cfg.Turns == nil {
-		return nil, fmt.Errorf("server: Turns is required")
+	if cfg.Runner == nil {
+		return nil, fmt.Errorf("server: Runner is required")
 	}
 	if cfg.Manager == nil {
 		return nil, fmt.Errorf("server: Manager is required")
@@ -44,7 +45,11 @@ func New(cfg Config) (*Server, error) {
 	if newID == nil {
 		newID = defaultNewID
 	}
-	return &Server{turns: cfg.Turns, mgr: cfg.Manager, cwd: cfg.CWD, newID: newID}, nil
+	turns, err := compose.New(compose.Config{Runner: cfg.Runner, Manager: cfg.Manager})
+	if err != nil {
+		return nil, fmt.Errorf("server: compose turns: %w", err)
+	}
+	return &Server{turns: turns, mgr: cfg.Manager, cwd: cfg.CWD, newID: newID}, nil
 }
 
 // Handler returns the fully wired HTTP handler (middleware + routes).

@@ -10,8 +10,9 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { goOrigin } from "./backend";
 
-const GO_ORIGIN = process.env.SERPE_GO_ORIGIN ?? "http://127.0.0.1:8080";
+const GO_ORIGIN = goOrigin();
 const PORT = Number(process.env.PORT ?? 3000);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

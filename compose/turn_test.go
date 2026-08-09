@@ -504,12 +504,47 @@ func TestStreamCommitsOnExhaust(t *testing.T) {
 	}
 }
 
+func TestStreamCommitsBeforeRunEndIsPublished(t *testing.T) {
+	ctx := context.Background()
+	model := &scriptedModel{responses: []*models.Response{textResponse("streamed")}}
+	store := sessions.NewMemoryStore()
+	mustCreate(t, store, "s1")
+	svc := mustService(t, model, store, agent.Limits{})
+
+	turn, err := svc.Stream(ctx, "s1", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for turn.Next() {
+		if turn.Event().Kind != agent.EventRunEnd {
+			continue
+		}
+		if err := turn.Err(); err != nil {
+			t.Fatalf("terminal event exposed commit error: %v", err)
+		}
+		if turn.Session() == nil || len(turn.Session().Messages) != 2 {
+			t.Fatalf("run_end published before commit: %+v", turn.Session())
+		}
+		if err := turn.Close(); err != nil {
+			t.Fatal(err)
+		}
+		mgr, _ := sessions.NewManager(store)
+		committed, err := mgr.Get(ctx, "s1")
+		if err != nil || len(committed.Messages) != 2 {
+			t.Fatalf("breaking at run_end then closing lost commit: %+v, %v", committed, err)
+		}
+		return
+	}
+	t.Fatal("stream ended without run_end")
+}
+
 // failSaveStore wraps MemoryStore and fails every Save (commit path).
 type failSaveStore struct {
 	*sessions.MemoryStore
 }
 
-func (s *failSaveStore) Save(ctx context.Context, session *sessions.Session) error {
+func (s *failSaveStore) Save(ctx context.Context, id string, data []byte) error {
 	return errors.New("disk full")
 }
 

@@ -21,7 +21,7 @@ type flakyStore struct {
 	saveOnce  sync.Once
 }
 
-func (f *flakyStore) Save(ctx context.Context, session *Session) error {
+func (f *flakyStore) Save(ctx context.Context, id string, data []byte) error {
 	if f.failSave {
 		return errors.New("save failed")
 	}
@@ -33,7 +33,7 @@ func (f *flakyStore) Save(ctx context.Context, session *Session) error {
 		case <-f.blockSave:
 		}
 	}
-	return f.MemoryStore.Save(ctx, session)
+	return f.MemoryStore.Save(ctx, id, data)
 }
 
 func mustManager(t *testing.T, store Store) *Manager {
@@ -91,39 +91,26 @@ func TestCreateGet(t *testing.T) {
 	}
 }
 
-func TestUpdateCommit(t *testing.T) {
-	m := mustManager(t, NewMemoryStore())
+func TestManagerRejectsRecordKeyMismatch(t *testing.T) {
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	store := NewMemoryStore()
+	data, err := marshalSession(New("payload-id", "/wd"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := m.Update(ctx, "s1", func(s *Session) error {
-		s.CWD = "/a"
-		s.Metadata = map[string]string{"title": "t"}
-		s.UpdatedAt = time.Time{} // manager-owned, must be ignored
-		return nil
-	})
+	if err := store.Create(ctx, "storage-id", data); err != nil {
+		t.Fatal(err)
+	}
+	m := mustManager(t, store)
+	if _, err := m.Get(ctx, "storage-id"); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("Get key/payload mismatch = %v, want ErrInvalidSession", err)
+	}
+	listed, err := m.List(ctx)
 	if err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatal(err)
 	}
-	if first.CWD != "/a" || first.Metadata["title"] != "t" {
-		t.Fatalf("Update did not commit: %+v", first)
-	}
-	if first.UpdatedAt.IsZero() || first.UpdatedAt.Before(first.CreatedAt) {
-		t.Fatalf("UpdatedAt not manager-maintained: %+v", first.UpdatedAt)
-	}
-	second, err := m.Update(ctx, "s1", func(s *Session) error {
-		s.CWD = "/b"
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("second Update: %v", err)
-	}
-	if second.UpdatedAt.Before(first.UpdatedAt) {
-		t.Fatalf("UpdatedAt went backwards: %v then %v", first.UpdatedAt, second.UpdatedAt)
-	}
-	if _, err := m.Update(ctx, "s1", nil); !errors.Is(err, ErrInvalidSession) {
-		t.Fatalf("Update with nil mutator = %v, want ErrInvalidSession", err)
+	if len(listed) != 0 {
+		t.Fatalf("List exposed mismatched record: %+v", listed)
 	}
 }
 
@@ -139,6 +126,9 @@ func TestSetCWDAndSetMetadata(t *testing.T) {
 	}
 	if got.CWD != "/new" {
 		t.Fatalf("CWD = %q", got.CWD)
+	}
+	if got.UpdatedAt.Before(got.CreatedAt) {
+		t.Fatalf("UpdatedAt went backwards: %v", got.UpdatedAt)
 	}
 	if _, err := m.SetCWD(ctx, "s1", "  "); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("blank CWD = %v", err)
@@ -174,91 +164,77 @@ func TestSetCWDAndSetMetadata(t *testing.T) {
 	_ = again
 }
 
-func TestUpdateFailureRollsBack(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("mutator error", func(t *testing.T) {
-		m := mustManager(t, NewMemoryStore())
-		if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
-			t.Fatal(err)
-		}
-		mutErr := errors.New("mutator failed")
-		_, err := m.Update(ctx, "s1", func(s *Session) error {
-			s.CWD = "/mutated"
-			s.Messages = append(s.Messages, models.NewUserMessage(models.Text("x")))
-			return mutErr
-		})
-		if !errors.Is(err, mutErr) {
-			t.Fatalf("Update = %v, want mutator error", err)
-		}
-		got, _ := m.Get(ctx, "s1")
-		if got.CWD != "/wd" || len(got.Messages) != 0 {
-			t.Fatalf("mutator error polluted stored state: %+v", got)
-		}
-	})
-
-	t.Run("store error", func(t *testing.T) {
-		m := mustManager(t, &flakyStore{MemoryStore: NewMemoryStore(), failSave: true})
-		if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
-			t.Fatal(err)
-		}
-		_, err := m.Update(ctx, "s1", func(s *Session) error {
-			s.CWD = "/mutated"
-			return nil
-		})
-		if err == nil {
-			t.Fatal("Update succeeded despite failing store")
-		}
-		got, _ := m.Get(ctx, "s1")
-		if got.CWD != "/wd" {
-			t.Fatalf("save error polluted stored state: %+v", got)
-		}
-	})
-}
-
-func TestUpdateProtectsImmutableState(t *testing.T) {
+func TestPatchMetadataPreservesConcurrentKeys(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
 	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Append(ctx, "s1",
-		models.NewUserMessage(models.Text("one")),
-		models.NewAssistantMessage(models.Text("two")),
-	); err != nil {
+
+	const writers = 32
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			key := fmt.Sprintf("key-%d", i)
+			value := fmt.Sprintf("value-%d", i)
+			_, err := m.PatchMetadata(ctx, "s1", map[string]*string{key: &value})
+			errs <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := m.Get(ctx, "s1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	before, _ := m.Get(ctx, "s1")
-
-	attempts := []struct {
-		name   string
-		mutate func(*Session) error
-	}{
-		{"change ID", func(s *Session) error { s.ID = "other"; return nil }},
-		{"change parent", func(s *Session) error { s.ParentID = "p"; return nil }},
-		{"change created", func(s *Session) error { s.CreatedAt = time.Now().UTC(); return nil }},
-		{"rewrite message", func(s *Session) error {
-			s.Messages[0].Content[0].Text.Text = "rewritten"
-			return nil
-		}},
-		{"truncate", func(s *Session) error { s.Messages = s.Messages[:1]; return nil }},
-		{"reorder", func(s *Session) error {
-			s.Messages[0], s.Messages[1] = s.Messages[1], s.Messages[0]
-			return nil
-		}},
+	if len(got.Metadata) != writers {
+		t.Fatalf("metadata keys = %d, want %d: %+v", len(got.Metadata), writers, got.Metadata)
 	}
-	for _, tt := range attempts {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := m.Update(ctx, "s1", tt.mutate); !errors.Is(err, ErrInvalidSession) {
-				t.Fatalf("Update = %v, want ErrInvalidSession", err)
-			}
-			after, _ := m.Get(ctx, "s1")
-			if len(after.Messages) != len(before.Messages) ||
-				!after.Messages[0].Equal(before.Messages[0]) ||
-				!after.Messages[1].Equal(before.Messages[1]) {
-				t.Fatal("rejected update modified stored transcript")
-			}
-		})
+	for i := 0; i < writers; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		if want := fmt.Sprintf("value-%d", i); got.Metadata[key] != want {
+			t.Fatalf("metadata[%q] = %q, want %q", key, got.Metadata[key], want)
+		}
+	}
+
+	if _, err := m.PatchMetadata(ctx, "s1", map[string]*string{"key-0": nil}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = m.Get(ctx, "s1")
+	if _, ok := got.Metadata["key-0"]; ok {
+		t.Fatal("nil patch did not delete key-0")
+	}
+	if _, err := m.PatchMetadata(ctx, "s1", map[string]*string{"bad key": nil}); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("invalid patch key = %v, want ErrInvalidSession", err)
+	}
+}
+
+func TestIntentWriteStoreFailureRollsBack(t *testing.T) {
+	store := &flakyStore{MemoryStore: NewMemoryStore()}
+	m := mustManager(t, store)
+	ctx := context.Background()
+	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+		t.Fatal(err)
+	}
+	store.failSave = true
+	if _, err := m.SetCWD(ctx, "s1", "/mutated"); err == nil {
+		t.Fatal("SetCWD succeeded despite failing store")
+	}
+	got, _ := m.Get(ctx, "s1")
+	if got.CWD != "/wd" {
+		t.Fatalf("save error polluted stored state: %+v", got)
 	}
 }
 
@@ -643,92 +619,25 @@ func TestLockTableReclaimed(t *testing.T) {
 	}
 }
 
-// loadFailingStore wraps MemoryStore and fails the next Load on demand, to
-// simulate a context canceled between a successful write and the post-write
-// read-back.
-type loadFailingStore struct {
-	*MemoryStore
-	failNextLoad bool
+// noCopyStore deliberately aliases record byte slices. It verifies that the
+// Manager's codec boundary does not expose caller-owned Session memory even
+// when a third-party backend violates Store's byte-ownership contract.
+type noCopyStore struct {
+	saved map[string][]byte
 }
 
-func (s *loadFailingStore) Load(ctx context.Context, id string) (*Session, error) {
-	if s.failNextLoad {
-		s.failNextLoad = false
-		return nil, context.Canceled
-	}
-	return s.MemoryStore.Load(ctx, id)
-}
-
-// TestCommittedWriteSurvivesPostWriteLoadFailure verifies that when the store
-// write succeeds but the following read-back fails (e.g. a context canceled
-// after the write landed), the Manager reports success and a snapshot of the
-// committed state rather than an error for an already-durable change.
-func TestCommittedWriteSurvivesPostWriteLoadFailure(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("update", func(t *testing.T) {
-		store := &loadFailingStore{MemoryStore: NewMemoryStore()}
-		m := mustManager(t, store)
-		if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
-			t.Fatal(err)
-		}
-		// Fail the post-Save read-back (inside Manager.committed). The mutator
-		// runs after the initial Load and before Save, so this targets exactly
-		// the committed Load.
-		got, err := m.Update(ctx, "s1", func(s *Session) error {
-			s.CWD = "/committed"
-			store.failNextLoad = true
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("Update returned %v for a committed write", err)
-		}
-		if got.CWD != "/committed" {
-			t.Fatalf("snapshot = %+v, want /committed", got)
-		}
-		check, _ := m.Get(ctx, "s1")
-		if check.CWD != "/committed" {
-			t.Fatalf("committed change not durable: %+v", check)
-		}
-	})
-
-	t.Run("create", func(t *testing.T) {
-		store := &loadFailingStore{MemoryStore: NewMemoryStore()}
-		store.failNextLoad = true
-		m := mustManager(t, store)
-		got, err := m.Create(ctx, New("s1", "/wd"))
-		if err != nil {
-			t.Fatalf("Create returned %v for a committed write", err)
-		}
-		if got.ID != "s1" || got.CWD != "/wd" {
-			t.Fatalf("snapshot = %+v", got)
-		}
-		check, _ := m.Get(ctx, "s1")
-		if check == nil || check.CWD != "/wd" {
-			t.Fatalf("committed create not durable: %+v", check)
-		}
-	})
-}
-
-// noCloneStore stores and returns session pointers without cloning, so it
-// isolates whether the Manager clones at its own boundary rather than relying
-// on the store.
-type noCloneStore struct {
-	saved map[string]*Session
-}
-
-func (s *noCloneStore) Create(ctx context.Context, session *Session) error {
+func (s *noCopyStore) Create(ctx context.Context, id string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, ok := s.saved[session.ID]; ok {
+	if _, ok := s.saved[id]; ok {
 		return ErrAlreadyExists
 	}
-	s.saved[session.ID] = session
+	s.saved[id] = data
 	return nil
 }
 
-func (s *noCloneStore) Load(ctx context.Context, id string) (*Session, error) {
+func (s *noCopyStore) Load(ctx context.Context, id string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -742,18 +651,18 @@ func (s *noCloneStore) Load(ctx context.Context, id string) (*Session, error) {
 	return got, nil
 }
 
-func (s *noCloneStore) Save(ctx context.Context, session *Session) error {
+func (s *noCopyStore) Save(ctx context.Context, id string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, ok := s.saved[session.ID]; !ok {
+	if _, ok := s.saved[id]; !ok {
 		return ErrNotFound
 	}
-	s.saved[session.ID] = session
+	s.saved[id] = data
 	return nil
 }
 
-func (s *noCloneStore) Delete(ctx context.Context, id string) error {
+func (s *noCopyStore) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -764,25 +673,25 @@ func (s *noCloneStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *noCloneStore) List(ctx context.Context) ([]*Session, error) {
+func (s *noCopyStore) List(ctx context.Context) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]*Session, 0, len(s.saved))
-	for _, got := range s.saved {
-		out = append(out, got)
+	out := make([]Record, 0, len(s.saved))
+	for id, data := range s.saved {
+		out = append(out, Record{ID: id, Data: data})
 	}
 	return out, nil
 }
 
-// TestManagerClonesAtWriteBoundary verifies the Manager clones caller input at
-// its write boundary (Create) and deep-copies the source transcript into a
-// forked child rather than aliasing it, using a store that does not clone.
+// TestManagerClonesAtWriteBoundary verifies the Manager codec owns caller
+// input and produces independent source/fork snapshots even with a backend
+// that does not honor byte ownership.
 func TestManagerClonesAtWriteBoundary(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("create input is cloned", func(t *testing.T) {
-		store := &noCloneStore{saved: map[string]*Session{}}
+		store := &noCopyStore{saved: map[string][]byte{}}
 		m := mustManager(t, store)
 		input := New("s1", "/wd")
 		input.Messages = []models.Message{models.NewUserMessage(models.Text("hi"))}
@@ -799,7 +708,7 @@ func TestManagerClonesAtWriteBoundary(t *testing.T) {
 	})
 
 	t.Run("fork child does not alias source", func(t *testing.T) {
-		store := &noCloneStore{saved: map[string]*Session{}}
+		store := &noCopyStore{saved: map[string][]byte{}}
 		m := mustManager(t, store)
 		src := New("s1", "/wd")
 		src.Messages = []models.Message{models.NewUserMessage(models.Text("hi"))}
@@ -809,8 +718,7 @@ func TestManagerClonesAtWriteBoundary(t *testing.T) {
 		if _, err := m.Fork(ctx, "s1", "s2"); err != nil {
 			t.Fatal(err)
 		}
-		// With a non-cloning store, Get returns the stored pointer, so mutating
-		// the source transcript must not affect the forked child.
+		// Decoded snapshots remain independent even when stored bytes alias.
 		source, _ := m.Get(ctx, "s1")
 		child, _ := m.Get(ctx, "s2")
 		source.Messages[0].Content[0].Text.Text = "mutated"
