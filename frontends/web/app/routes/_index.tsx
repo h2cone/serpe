@@ -22,7 +22,7 @@ export default function Index() {
         <div className="empty-mark" aria-hidden="true" />
         <h1>Ready when you are</h1>
         <p>
-          Create a session from the sidebar, or make sure <code>serpeserve</code>{" "}
+          Create a session from the sidebar, or make sure <code>serpe-server</code>{" "}
           is running on :8080.
         </p>
         <button

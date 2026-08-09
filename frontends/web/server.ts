@@ -1,5 +1,5 @@
 /**
- * Production Node entry: reverse-proxy /api/* to Go, rest to RR7 handler.
+ * Production Node entry: reverse-proxy /api/* to the Serpe API, rest to RR7.
  * Dev uses Vite proxy instead (see vite.config.ts).
  *
  * Run after `npm run build`: `node --import tsx server.ts` or compile first.
@@ -10,9 +10,9 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { goOrigin } from "./backend";
+import { apiOrigin } from "./api-origin";
 
-const GO_ORIGIN = goOrigin();
+const API_ORIGIN = apiOrigin();
 const PORT = Number(process.env.PORT ?? 3000);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +44,7 @@ async function proxyToGo(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
 ) {
-  const target = new URL(req.url ?? "/", GO_ORIGIN);
+  const target = new URL(req.url ?? "/", API_ORIGIN);
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers)) {
     if (v && k.toLowerCase() !== "host") {
@@ -80,5 +80,5 @@ async function proxyToGo(
 }
 
 server.listen(PORT, () => {
-  console.log(`serpe ui on :${PORT} (api → ${GO_ORIGIN})`);
+  console.log(`serpe web on :${PORT} (api → ${API_ORIGIN})`);
 });

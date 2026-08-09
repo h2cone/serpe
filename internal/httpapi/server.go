@@ -1,5 +1,5 @@
-// Package server exposes sessions and agent turns over HTTP (REST + SSE).
-package server
+// Package httpapi exposes sessions and agent turns over HTTP (REST + SSE).
+package httpapi
 
 import (
 	"crypto/rand"
@@ -33,13 +33,13 @@ type Server struct {
 // New validates cfg and returns a Server.
 func New(cfg Config) (*Server, error) {
 	if cfg.Runner == nil {
-		return nil, fmt.Errorf("server: Runner is required")
+		return nil, fmt.Errorf("httpapi: Runner is required")
 	}
 	if cfg.Manager == nil {
-		return nil, fmt.Errorf("server: Manager is required")
+		return nil, fmt.Errorf("httpapi: Manager is required")
 	}
 	if strings.TrimSpace(cfg.CWD) == "" {
-		return nil, fmt.Errorf("server: CWD is required")
+		return nil, fmt.Errorf("httpapi: CWD is required")
 	}
 	newID := cfg.NewID
 	if newID == nil {
@@ -47,7 +47,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	turns, err := compose.New(compose.Config{Runner: cfg.Runner, Manager: cfg.Manager})
 	if err != nil {
-		return nil, fmt.Errorf("server: compose turns: %w", err)
+		return nil, fmt.Errorf("httpapi: compose turns: %w", err)
 	}
 	return &Server{turns: turns, mgr: cfg.Manager, cwd: cfg.CWD, newID: newID}, nil
 }

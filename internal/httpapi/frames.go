@@ -1,4 +1,4 @@
-package server
+package httpapi
 
 import (
 	"github.com/h2cone/serpe/agent"
@@ -6,7 +6,7 @@ import (
 )
 
 // SSE wire frames are bound to the UI runtime decoder through the shared
-// server/testdata/sse_frames.json contract fixture. mapEvent / mapModelEvent
+// api/examples/sse_frames.json contract fixture. mapEvent / mapModelEvent
 // return these concrete types only (no map[string]any).
 
 type frameRunStart struct {

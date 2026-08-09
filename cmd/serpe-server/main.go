@@ -1,4 +1,4 @@
-// Command serpeserve is the HTTP entrypoint for the serpe agent API.
+// Command serpe-server runs the shared HTTP backend for Serpe clients.
 package main
 
 import (
@@ -13,7 +13,7 @@ import (
 
 	"github.com/h2cone/serpe/core/sessions"
 	"github.com/h2cone/serpe/internal/bootstrap"
-	"github.com/h2cone/serpe/server"
+	"github.com/h2cone/serpe/internal/httpapi"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 	mgr := must(sessions.NewManager(store))
 
 	runner := must(bootstrap.NewRunner(bootstrap.RunnerConfigFromEnv()))
-	srv := must(server.New(server.Config{Runner: runner, Manager: mgr, CWD: cwd}))
+	srv := must(httpapi.New(httpapi.Config{Runner: runner, Manager: mgr, CWD: cwd}))
 
 	httpSrv := &http.Server{
 		Addr:    addr,

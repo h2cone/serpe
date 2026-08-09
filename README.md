@@ -10,12 +10,12 @@ and continuing until the run completes.
 %%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
 flowchart TB
     %% Entrypoints
-    ui["ui/ (React Router 7)"]
-    serve["cmd/serpeserve"]
-    cli["main.go"]
+    web["frontends/web (React Router 7)"]
+    serve["cmd/serpe-server"]
+    cli["cmd/serpe"]
 
     %% Application seams and runtime modules
-    server["server"]
+    httpapi["internal/httpapi"]
     compose["compose"]
     bootstrap["internal/bootstrap"]
     sessions["core/sessions"]
@@ -35,12 +35,12 @@ flowchart TB
     cli --> bootstrap
     cli --> agent
     serve --> bootstrap
-    serve --> server
-    ui -.->|HTTP / SSE| server
+    serve --> httpapi
+    web -.->|HTTP / SSE| httpapi
 
     bootstrap --> agent
     bootstrap --> providers
-    server --> compose
+    httpapi --> compose
     compose --> agent
     compose --> sessions
 
@@ -65,15 +65,17 @@ flowchart TB
 
 Solid arrows show the primary Go dependency paths. Direct imports already
 represented transitively are omitted for readability. The dotted arrow marks
-the UI's HTTP/SSE boundary.
+the Web frontend's HTTP/SSE boundary.
 
 `agent` never imports `core/sessions` or `core/providers`. `compose` is the
 application seam that joins `agent.Runner` with `sessions.Manager` for a
-single turn boundary. `server` receives one `agent.Runner`/`sessions.Manager`
+single turn boundary. `internal/httpapi` receives one
+`agent.Runner`/`sessions.Manager`
 pair and constructs that seam itself, so CRUD operations and turns cannot be
 wired to different stores. `internal/bootstrap` owns provider/model/tool
 construction shared by both commands. `internal/jsonvalue` is a leaf used by
-`core/models`, `agent`, `server`, and `core/providers/internal/shared`.
+`core/models`, `agent`, `internal/httpapi`, and
+`core/providers/internal/shared`.
 
 ## Modules
 
@@ -206,24 +208,24 @@ result, session, err := svc.Send(ctx, "sess-1", "What is in this repo?")
 // or: turn, _ := svc.Stream(ctx, "sess-1", prompt); for turn.Next() { ... }
 ```
 
-### `server` + `cmd/serpeserve`
+### `internal/httpapi` + `cmd/serpe-server`
 
 The server exposes `GET /api/health`; `GET` and `POST` on `/api/sessions`;
 `GET`, `PATCH`, and `DELETE` on `/api/sessions/{id}`;
 `POST /api/sessions/{id}/fork`; and `POST /api/runs`. The runs endpoint returns
 a `text/event-stream` backed by `TurnService.Stream`.
 
-`server.New` takes one `agent.Runner` and one `sessions.Manager`, then
+`httpapi.New` takes one `agent.Runner` and one `sessions.Manager`, then
 constructs its own `TurnService`, ensuring that CRUD operations and runs use
 the same store. The runs endpoint opens the turn—and therefore loads the
 session—before writing SSE headers, so lookup and request-validation errors
 can still be returned as JSON. The executable TypeScript contract in
-`ui/app/lib/wire.ts` validates SSE frames and session REST DTOs at the browser
-boundary. Go and TypeScript tests consume the same concrete fixtures under
-`server/testdata`.
+`frontends/web/app/lib/wire.ts` validates SSE frames and session REST DTOs at
+the browser boundary. Go and TypeScript tests consume the same concrete
+fixtures under `api/examples`.
 
 ```go
-srv, _ := server.New(server.Config{
+srv, _ := httpapi.New(httpapi.Config{
     Runner: runner, Manager: manager, CWD: "/work",
 })
 ```
@@ -233,13 +235,16 @@ The Go CLI and API server read `OPENAI_API_KEY`; `OPENAI_BASE_URL` and
 
 ```bash
 # API (:8080 by default; MemoryStore unless SERPE_SESSIONS_DIR is set)
-go run ./cmd/serpeserve   # :8080
+go run ./cmd/serpe-server   # :8080
 
-# UI development server (proxies /api to http://127.0.0.1:8080 by default)
-cd ui && npm install && npm run dev
+# Web development server (proxies /api to http://127.0.0.1:8080 by default)
+cd frontends/web && npm install && npm run dev
 ```
 
-### `main.go`
+Set `SERPE_API_ORIGIN` to point Web development, SSR, and the production proxy
+at a backend other than `http://127.0.0.1:8080`.
+
+### `cmd/serpe`
 
 Handles CLI arguments and event rendering; shared provider/model/tool wiring
 lives in `internal/bootstrap`, while the model-tool loop lives in `agent`.

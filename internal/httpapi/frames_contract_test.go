@@ -1,8 +1,9 @@
-package server
+package httpapi
 
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestSSEFrameContractFixture(t *testing.T) {
 		frameDone{T: "done", SessionID: "s1", Stop: "completed", MessageCount: 2},
 	}
 
-	wantJSON, err := os.ReadFile("testdata/sse_frames.json")
+	wantJSON, err := os.ReadFile(filepath.Join("..", "..", "api", "examples", "sse_frames.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ func TestSSEFrameContractFixture(t *testing.T) {
 		t.Fatalf("decode Go frames: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Go SSE frames differ from server/testdata/sse_frames.json\n got: %s\nwant: %s", gotJSON, wantJSON)
+		t.Fatalf("Go SSE frames differ from api/examples/sse_frames.json\n got: %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
 
@@ -96,7 +97,7 @@ func TestSessionDetailContractFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantJSON, err := os.ReadFile("testdata/session_detail.json")
+	wantJSON, err := os.ReadFile(filepath.Join("..", "..", "api", "examples", "session_detail.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

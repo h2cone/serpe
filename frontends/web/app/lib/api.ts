@@ -1,4 +1,4 @@
-import { goOrigin } from "../../backend";
+import { apiOrigin } from "../../api-origin";
 import {
   decodeSessionDetail,
   decodeSessionSummaries,
@@ -6,10 +6,10 @@ import {
   type SessionSummary,
 } from "./wire";
 
-/** Browser: same origin. SSR/dev: Go API (Vite proxies in browser only). */
+/** Browser: same origin. SSR/dev: backend API (Vite proxies in browser only). */
 function apiBase(): string {
   if (typeof window !== "undefined") return "";
-  return goOrigin();
+  return apiOrigin();
 }
 
 async function json<T>(

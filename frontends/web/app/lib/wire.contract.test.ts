@@ -6,7 +6,7 @@ describe("Go SSE wire contract", () => {
   it("decodes every concrete frame serialized by the server", () => {
     const fixture = JSON.parse(
       readFileSync(
-        new URL("../../../server/testdata/sse_frames.json", import.meta.url),
+        new URL("../../../../api/examples/sse_frames.json", import.meta.url),
         "utf8",
       ),
     ) as unknown[];
@@ -32,7 +32,7 @@ describe("REST wire contract", () => {
   it("decodes the concrete session DTO serialized by the server", () => {
     const fixture = JSON.parse(
       readFileSync(
-        new URL("../../../server/testdata/session_detail.json", import.meta.url),
+        new URL("../../../../api/examples/session_detail.json", import.meta.url),
         "utf8",
       ),
     ) as unknown;

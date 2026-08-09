@@ -26,8 +26,8 @@ docs/*
 .tmp/
 *.tmp
 
-# Node / UI
-ui/node_modules/
-ui/build/
-ui/.react-router/
+# Node / frontends
+node_modules/
+build/
+.react-router/
 

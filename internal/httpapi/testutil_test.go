@@ -1,4 +1,4 @@
-package server_test
+package httpapi_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/h2cone/serpe/agent"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/sessions"
-	"github.com/h2cone/serpe/server"
+	"github.com/h2cone/serpe/internal/httpapi"
 )
 
 // scriptedModel implements models.Model with a fixed sequence of responses.
@@ -192,11 +192,11 @@ func (nowTool) Execute(ctx context.Context, arguments json.RawMessage) (agent.To
 	return agent.TextResult("12:00"), nil
 }
 
-func newTestServer(t *testing.T, model models.Model, tools []agent.Tool, newID func() string) (*server.Server, *sessions.Manager) {
+func newTestServer(t *testing.T, model models.Model, tools []agent.Tool, newID func() string) (*httpapi.Server, *sessions.Manager) {
 	return newTestServerWithStore(t, model, tools, newID, sessions.NewMemoryStore())
 }
 
-func newTestServerWithStore(t *testing.T, model models.Model, tools []agent.Tool, newID func() string, store sessions.Store) (*server.Server, *sessions.Manager) {
+func newTestServerWithStore(t *testing.T, model models.Model, tools []agent.Tool, newID func() string, store sessions.Store) (*httpapi.Server, *sessions.Manager) {
 	t.Helper()
 	if model == nil {
 		model = &scriptedModel{responses: []*models.Response{textResponse("hello")}}
@@ -212,14 +212,14 @@ func newTestServerWithStore(t *testing.T, model models.Model, tools []agent.Tool
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	srv, err := server.New(server.Config{
+	srv, err := httpapi.New(httpapi.Config{
 		Runner:  runner,
 		Manager: mgr,
 		CWD:     "/tmp",
 		NewID:   newID,
 	})
 	if err != nil {
-		t.Fatalf("server.New: %v", err)
+		t.Fatalf("httpapi.New: %v", err)
 	}
 	return srv, mgr
 }
