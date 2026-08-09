@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
 var chatUnaryFixture = []byte(`{"id":"r","created":1,"model":"m","choices":[{"index":0,"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)

@@ -5,7 +5,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // Session is a provider-neutral conversation snapshot.

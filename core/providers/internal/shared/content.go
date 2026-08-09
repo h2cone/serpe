@@ -1,6 +1,6 @@
 package shared
 
-import "github.com/h2cone/ouro/core/models"
+import "github.com/h2cone/serpe/core/models"
 
 // EquivalentContent reports whether two normalized content sequences carry the
 // same meaning. Tool arguments are compared as JSON values so insignificant

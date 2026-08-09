@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // Tool binds one model-visible definition to its execution logic.

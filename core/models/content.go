@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 // ContentKind identifies a member of the closed Content union.

@@ -48,7 +48,7 @@ func NewFileStore(root string) (*FileStore, error) {
 		return nil, fmt.Errorf("%w: root is not a directory", ErrInvalidSession)
 	}
 	// Probe writability without leaving permanent debris.
-	probe := filepath.Join(abs, ".ouro-store-probe-"+randomHex(4))
+	probe := filepath.Join(abs, ".serpe-store-probe-"+randomHex(4))
 	if err := os.WriteFile(probe, []byte{0}, 0o600); err != nil {
 		return nil, fmt.Errorf("%w: root not writable: %v", ErrInvalidSession, err)
 	}

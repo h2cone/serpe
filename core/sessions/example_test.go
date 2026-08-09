@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/sessions"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/sessions"
 )
 
 // Example demonstrates the minimal flow: create an empty session, append

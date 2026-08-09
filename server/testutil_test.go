@@ -7,11 +7,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/compose"
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/sessions"
-	"github.com/h2cone/ouro/server"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/compose"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/server"
 )
 
 // scriptedModel implements models.Model with a fixed sequence of responses.

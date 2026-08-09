@@ -3,7 +3,7 @@ package shared
 import (
 	"testing"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 func TestMergeInstructions(t *testing.T) {

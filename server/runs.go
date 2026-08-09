@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/core/sessions"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/core/sessions"
 )
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {

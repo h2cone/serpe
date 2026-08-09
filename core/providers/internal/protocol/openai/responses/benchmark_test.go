@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
 var responsesUnaryFixture = []byte(`{"id":"r","model":"m","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}]}`)

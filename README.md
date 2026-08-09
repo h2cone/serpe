@@ -1,4 +1,4 @@
-# ouro
+# serpe
 
 An Agent Harness in Go. The harness owns the loop around the model: assemble
 context, stream a response, execute tool calls, append their results, and
@@ -7,7 +7,7 @@ continue until done. Provider specifics stay behind a `models.Model` seam.
 ## Dependency graph
 
 ```
-                      main.go          cmd/ouroserve
+                      main.go          cmd/serpeserve
                          │                   │
               ┌──────────┴───────────────┐   │
               │          │               │   ▼
@@ -99,7 +99,7 @@ _, _ = manager.Append(ctx, created.ID,
 Disk-backed store (process restart recovery; single process):
 
 ```go
-store, _ := sessions.NewFileStore("/var/lib/ouro/sessions")
+store, _ := sessions.NewFileStore("/var/lib/serpe/sessions")
 manager, _ := sessions.NewManager(store)
 // Session IDs must be filesystem-safe: [A-Za-z0-9._-], not Windows device names.
 ```
@@ -126,7 +126,7 @@ result, committed, err := svc.Send(ctx, "sess-1", "What is in this repo?")
 // or: turn, _ := svc.Stream(ctx, "sess-1", prompt); for turn.Next() { ... }
 ```
 
-### `server` + `cmd/ouroserve`
+### `server` + `cmd/serpeserve`
 
 ```
 server ──► compose · agent · core/sessions · core/models
@@ -136,8 +136,8 @@ server ──► compose · agent · core/sessions · core/models
 ```
 
 ```bash
-# API (default MemoryStore; set OURO_SESSIONS_DIR for FileStore)
-go run ./cmd/ouroserve   # :8080
+# API (default MemoryStore; set SERPE_SESSIONS_DIR for FileStore)
+go run ./cmd/serpeserve   # :8080
 
 # UI (dev; proxies /api → :8080)
 cd ui && npm install && npm run dev

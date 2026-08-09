@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const GO_ORIGIN = process.env.OURO_GO_ORIGIN ?? "http://127.0.0.1:8080";
+const GO_ORIGIN = process.env.SERPE_GO_ORIGIN ?? "http://127.0.0.1:8080";
 const PORT = Number(process.env.PORT ?? 3000);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -79,5 +79,5 @@ async function proxyToGo(
 }
 
 server.listen(PORT, () => {
-  console.log(`ouro ui on :${PORT} (api → ${GO_ORIGIN})`);
+  console.log(`serpe ui on :${PORT} (api → ${GO_ORIGIN})`);
 });

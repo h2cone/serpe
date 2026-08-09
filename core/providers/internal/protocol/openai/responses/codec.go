@@ -4,7 +4,7 @@ package responses
 import (
 	"encoding/json"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 const protocol = "openai.responses"

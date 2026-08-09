@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/transport/httpx"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/providers/internal/transport/httpx"
 )
 
 const (

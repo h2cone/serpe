@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 // ContentRecord is the stable JSON shape for a Content block. Field names are

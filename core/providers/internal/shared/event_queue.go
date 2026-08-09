@@ -1,6 +1,6 @@
 package shared
 
-import "github.com/h2cone/ouro/core/models"
+import "github.com/h2cone/serpe/core/models"
 
 // EventQueue is a single-reader FIFO for normalized stream events. Shift is
 // O(1) and clears consumed entries so large event payloads are not retained for

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // flakyStore wraps MemoryStore with controllable Save failure and blocking.

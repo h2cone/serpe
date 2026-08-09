@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/h2cone/ouro/core/models"
-	openaicommon "github.com/h2cone/ouro/core/providers/internal/protocol/openai/internal/common"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/models"
+	openaicommon "github.com/h2cone/serpe/core/providers/internal/protocol/openai/internal/common"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
 func decodeResponse(wire responseWire, requestID string, stateLimit int64) (*models.Response, error) {

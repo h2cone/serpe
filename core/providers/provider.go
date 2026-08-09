@@ -26,7 +26,7 @@
 // disabled so both Drivers share the same safety contract.
 package providers
 
-import "github.com/h2cone/ouro/core/models"
+import "github.com/h2cone/serpe/core/models"
 
 // Provider is an immutable protocol and transport binding. Model validates and
 // binds an upstream model ID without network access.

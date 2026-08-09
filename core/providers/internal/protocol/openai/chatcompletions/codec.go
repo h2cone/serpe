@@ -4,8 +4,8 @@ package chatcompletions
 import (
 	"encoding/json"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
 const protocol = "openai.chat_completions"

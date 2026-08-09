@@ -11,17 +11,17 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/h2cone/ouro/core/models"
-	defaultgoogle "github.com/h2cone/ouro/core/providers/internal/protocol/google"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
+	"github.com/h2cone/serpe/core/models"
+	defaultgoogle "github.com/h2cone/serpe/core/providers/internal/protocol/google"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
 // Placeholder API key used when Config has no APIKey (Authenticator-only or
 // unauthenticated custom endpoint). The sdkhttp bridge strips this value before
 // the request leaves the process.
-const placeholderAPIKey = "ouro-gemini-placeholder-not-a-secret"
+const placeholderAPIKey = "serpe-gemini-placeholder-not-a-secret"
 
 // Provider is an immutable official-SDK Gemini GenerateContent provider.
 type Provider struct {

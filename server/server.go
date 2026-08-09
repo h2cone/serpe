@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/h2cone/ouro/compose"
-	"github.com/h2cone/ouro/core/sessions"
+	"github.com/h2cone/serpe/compose"
+	"github.com/h2cone/serpe/core/sessions"
 )
 
 // Config constructs a Server.

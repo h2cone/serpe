@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers"
 )
 
 func TestNewAndModelDoNotUseNetwork(t *testing.T) {

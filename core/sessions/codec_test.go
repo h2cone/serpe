@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 func TestCodecRoundTripAllContentKinds(t *testing.T) {

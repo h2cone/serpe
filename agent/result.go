@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/h2cone/ouro/core/models"
+import "github.com/h2cone/serpe/core/models"
 
 // StopReason explains why a run ended.
 type StopReason string

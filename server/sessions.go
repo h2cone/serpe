@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/sessions"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/sessions"
 )
 
 // metaKeyTitle is the sessions.Metadata key projected as the HTTP/UI title field.

@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // Run executes a complete agent run by draining Stream.

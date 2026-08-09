@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/h2cone/ouro/core/models"
+import "github.com/h2cone/serpe/core/models"
 
 // conversation is the sole mutable owner of a run's message sequence. base is
 // an immutable request template whose Messages field is always nil.

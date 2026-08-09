@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sdkhttp"
 )
 
 func TestOpenAIEndpoint(t *testing.T) {

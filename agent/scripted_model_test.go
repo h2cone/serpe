@@ -5,7 +5,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // scriptedModel implements models.Model with a fixed sequence of responses.

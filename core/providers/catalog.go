@@ -1,11 +1,11 @@
 package providers
 
 import (
-	"github.com/h2cone/ouro/core/providers/internal/driver/builtin"
-	officialanthropic "github.com/h2cone/ouro/core/providers/internal/driver/official/anthropic"
-	officialgoogle "github.com/h2cone/ouro/core/providers/internal/driver/official/google"
-	officialopenai "github.com/h2cone/ouro/core/providers/internal/driver/official/openai"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/providers/internal/driver/builtin"
+	officialanthropic "github.com/h2cone/serpe/core/providers/internal/driver/official/anthropic"
+	officialgoogle "github.com/h2cone/serpe/core/providers/internal/driver/official/google"
+	officialopenai "github.com/h2cone/serpe/core/providers/internal/driver/official/openai"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
 type providerFactory func(shared.Config) (Provider, error)

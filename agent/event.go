@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/h2cone/ouro/core/models"
+import "github.com/h2cone/serpe/core/models"
 
 // EventKind identifies a run-level lifecycle event.
 type EventKind string

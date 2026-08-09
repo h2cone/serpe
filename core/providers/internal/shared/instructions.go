@@ -3,10 +3,10 @@ package shared
 import (
 	"strings"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
-const instructionBoundary = "\n\n--- ouro instruction boundary ---\n\n"
+const instructionBoundary = "\n\n--- serpe instruction boundary ---\n\n"
 
 // MergeInstructions deterministically flattens system and developer
 // instructions for protocols with one instruction layer. requiresLenient is

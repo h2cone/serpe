@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 func TestContentTaggedUnionValidation(t *testing.T) {

@@ -1,4 +1,4 @@
-// Package jsonvalue implements Ouro's stable JSON value semantics. Its
+// Package jsonvalue implements Serpe's stable JSON value semantics. Its
 // canonical form ignores whitespace and object-key order, preserves number
 // lexemes, and deliberately does not claim RFC 8785 conformance.
 package jsonvalue

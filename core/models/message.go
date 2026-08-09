@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 // Role is the author of a conversational message.

@@ -3,7 +3,7 @@ package agent
 import (
 	"fmt"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // Config constructs an immutable Runner.

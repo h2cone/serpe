@@ -7,11 +7,11 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 
-	"github.com/h2cone/ouro/core/models"
-	defaultresponses "github.com/h2cone/ouro/core/providers/internal/protocol/openai/responses"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
+	"github.com/h2cone/serpe/core/models"
+	defaultresponses "github.com/h2cone/serpe/core/providers/internal/protocol/openai/responses"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
 type responsesAdapter struct {

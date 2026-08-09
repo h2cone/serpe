@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 func TestCanonicalValueSemantics(t *testing.T) {

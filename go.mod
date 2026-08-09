@@ -1,4 +1,4 @@
-module github.com/h2cone/ouro
+module github.com/h2cone/serpe
 
 go 1.26.5
 

@@ -12,11 +12,11 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
-	"github.com/h2cone/ouro/core/models"
-	defaultanthropic "github.com/h2cone/ouro/core/providers/internal/protocol/anthropic"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sdkhttp"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
+	"github.com/h2cone/serpe/core/models"
+	defaultanthropic "github.com/h2cone/serpe/core/providers/internal/protocol/anthropic"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sdkhttp"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
 // Provider is an immutable official-SDK Anthropic Messages provider.

@@ -1,4 +1,4 @@
-// Command ouroserve is the HTTP entrypoint for the ouro agent API.
+// Command serpeserve is the HTTP entrypoint for the serpe agent API.
 package main
 
 import (
@@ -12,12 +12,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/compose"
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers"
-	"github.com/h2cone/ouro/core/sessions"
-	"github.com/h2cone/ouro/server"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/compose"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers"
+	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/server"
 )
 
 func main() {
@@ -27,9 +27,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	addr := envOr("OURO_ADDR", ":8080")
-	cwd := envOr("OURO_CWD", must(os.Getwd()))
-	storeRoot := os.Getenv("OURO_SESSIONS_DIR")
+	addr := envOr("SERPE_ADDR", ":8080")
+	cwd := envOr("SERPE_CWD", must(os.Getwd()))
+	storeRoot := os.Getenv("SERPE_SESSIONS_DIR")
 
 	var store sessions.Store
 	if storeRoot != "" {

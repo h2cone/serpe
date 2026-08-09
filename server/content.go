@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 // messageDTO is the wire shape for a transcript message. Content uses the

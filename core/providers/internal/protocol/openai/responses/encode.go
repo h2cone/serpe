@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
 // EncodeRequest encodes a canonical request for the Responses protocol.

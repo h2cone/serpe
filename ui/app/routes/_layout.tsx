@@ -35,7 +35,7 @@ export default function Layout() {
       <aside className="sidebar flex flex-col gap-3 bg-slate-950/80">
         <div className="flex items-center justify-between gap-2">
           <Link to="/" className="text-sm font-semibold tracking-wide text-sky-300">
-            ouro
+            serpe
           </Link>
           <Form method="post">
             <input type="hidden" name="intent" value="create" />

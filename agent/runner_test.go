@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/core/models"
 )
 
 func userReq(text string) *models.Request {

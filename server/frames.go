@@ -1,8 +1,8 @@
 package server
 
 import (
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // SSE wire frames aligned with ui/app/lib/types.ts SSEFrame.

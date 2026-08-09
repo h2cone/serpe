@@ -9,7 +9,7 @@
 // the caller context; Gemini pins the backend, endpoint, API version, and a
 // stripped placeholder key. Gemini's canonical JSON body is attached with
 // PrepareCall and installed only at the final Bridge boundary. Successful
-// streams expose their raw response body so Ouro's bounded SSE parser remains
+// streams expose their raw response body so Serpe's bounded SSE parser remains
 // the single event parser for every driver.
 package sdkhttp
 
@@ -17,7 +17,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/h2cone/ouro/core/providers/internal/transport/httpx"
+	"github.com/h2cone/serpe/core/providers/internal/transport/httpx"
 )
 
 // Endpoint describes the base URL and API version expected by a vendor SDK.

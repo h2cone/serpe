@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // ReadJSON reads and validates one bounded top-level JSON value, then closes

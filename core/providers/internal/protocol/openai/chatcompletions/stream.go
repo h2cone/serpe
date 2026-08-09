@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers/internal/shared"
-	"github.com/h2cone/ouro/core/providers/internal/transport/sse"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
+	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
 type chatSource struct {

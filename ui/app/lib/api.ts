@@ -3,7 +3,7 @@ import type { SessionDetail, SessionSummary } from "./types";
 /** Browser: same origin. SSR/dev: Go API (Vite proxies in browser only). */
 function apiBase(): string {
   if (typeof window !== "undefined") return "";
-  return process.env.OURO_GO_ORIGIN ?? "http://127.0.0.1:8080";
+  return process.env.SERPE_GO_ORIGIN ?? "http://127.0.0.1:8080";
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {

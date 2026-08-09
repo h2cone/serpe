@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 func canonicalJSONObject(raw json.RawMessage) (string, error) {
@@ -73,7 +73,7 @@ func (e *fingerprintEncoder) sum() string {
 
 func contentFingerprint(content []models.Content) (string, error) {
 	encoder := newFingerprintEncoder()
-	encoder.writeString("ouro.agent.content-fingerprint.v1")
+	encoder.writeString("serpe.agent.content-fingerprint.v1")
 	if err := encoder.writeContent(content); err != nil {
 		return "", err
 	}
@@ -85,7 +85,7 @@ func stepFingerprint(calls []models.ToolCall, results []ToolOutput) (string, err
 		return "", fmt.Errorf("fingerprint: %d calls but %d results", len(calls), len(results))
 	}
 	encoder := newFingerprintEncoder()
-	encoder.writeString("ouro.agent.step-fingerprint.v1")
+	encoder.writeString("serpe.agent.step-fingerprint.v1")
 	encoder.writeUint64(uint64(len(calls)))
 	for i := range calls {
 		arguments, err := canonicalJSONObject(calls[i].Arguments)

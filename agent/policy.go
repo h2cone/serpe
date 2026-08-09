@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // This file owns run policy: model terminal classification, tool-choice

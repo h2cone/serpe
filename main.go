@@ -1,4 +1,4 @@
-// Command ouro assembles a provider model and agent.Runner, then renders
+// Command serpe assembles a provider model and agent.Runner, then renders
 // run-level events. The model–tool loop lives in package agent.
 package main
 
@@ -11,9 +11,9 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/core/models"
-	"github.com/h2cone/ouro/core/providers"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers"
 )
 
 func main() {

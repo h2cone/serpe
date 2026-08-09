@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/h2cone/ouro/agent"
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/core/models"
 )
 
 type stubTool struct {

@@ -4,7 +4,7 @@ package common
 import (
 	"strings"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // NormalizeError classifies an OpenAI wire error shared by Chat Completions

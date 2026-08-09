@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/h2cone/ouro/internal/jsonvalue"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 type partKey struct {

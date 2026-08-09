@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/h2cone/ouro/core/models"
+	"github.com/h2cone/serpe/core/models"
 )
 
 // Stream is a synchronous, pull-based sequence of run-level events. Controlled
