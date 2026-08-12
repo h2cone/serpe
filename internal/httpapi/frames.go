@@ -1,12 +1,12 @@
 package httpapi
 
 import (
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
 )
 
 // SSE wire frames are bound to the UI runtime decoder through the shared
-// api/examples/sse_frames.json contract fixture. mapEvent / mapModelEvent
+// contracts/sse_frames.json contract fixture. mapEvent / mapModelEvent
 // return these concrete types only (no map[string]any).
 
 type frameRunStart struct {
@@ -84,15 +84,15 @@ type frameDone struct {
 }
 
 // mapEvent converts an agent event into a typed SSE frame, or nil to drop.
-func mapEvent(ev agent.Event) any {
+func mapEvent(ev runtime.Event) any {
 	switch ev.Kind {
-	case agent.EventRunStart:
+	case runtime.EventRunStart:
 		return frameRunStart{T: "run_start"}
-	case agent.EventModelStart:
+	case runtime.EventModelStart:
 		return frameModelStart{T: "model_start", Turn: ev.ModelTurn}
-	case agent.EventModel:
+	case runtime.EventModel:
 		return mapModelEvent(ev)
-	case agent.EventModelEnd:
+	case runtime.EventModelEnd:
 		frame := frameModelEnd{T: "model_end", Turn: ev.ModelTurn}
 		if ev.Response != nil {
 			frame.Usage = usageToDTO(&ev.Response.Usage)
@@ -101,14 +101,14 @@ func mapEvent(ev agent.Event) any {
 			}
 		}
 		return frame
-	case agent.EventToolStart:
+	case runtime.EventToolStart:
 		return frameToolStart{
 			T:    "tool_start",
 			Turn: ev.ModelTurn,
 			Idx:  ev.ToolIndex,
 			Call: toolCallToRecord(ev.ToolCall),
 		}
-	case agent.EventToolEnd:
+	case runtime.EventToolEnd:
 		return frameToolEnd{
 			T:      "tool_end",
 			Turn:   ev.ModelTurn,
@@ -116,14 +116,14 @@ func mapEvent(ev agent.Event) any {
 			Call:   toolCallToRecord(ev.ToolCall),
 			Result: toolOutputToDTO(ev.ToolOutput),
 		}
-	case agent.EventRunEnd:
+	case runtime.EventRunEnd:
 		return frameRunEnd{T: "run_end", Stop: string(ev.StopReason)}
 	default:
 		return nil
 	}
 }
 
-func mapModelEvent(ev agent.Event) any {
+func mapModelEvent(ev runtime.Event) any {
 	m := ev.Model
 	switch m.Kind {
 	case models.EventPartStart:

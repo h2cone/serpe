@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 func TestRunSSESuccess(t *testing.T) {
@@ -171,7 +171,7 @@ func TestRunWithTool(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "call_1", Name: "now", Arguments: []byte(`{}`)}),
 		textResponse("It is noon."),
 	}}
-	srv, mgr := newTestServer(t, model, []agent.Tool{nowTool{}}, func() string { return "s1" })
+	srv, mgr := newTestServer(t, model, []runtime.Tool{nowTool{}}, func() string { return "s1" })
 	if _, err := mgr.Create(context.Background(), sessions.New("s1", "/tmp")); err != nil {
 		t.Fatal(err)
 	}

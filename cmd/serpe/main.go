@@ -1,5 +1,5 @@
-// Command serpe assembles a provider model and agent.Runner, then renders
-// run-level events. The model–tool loop lives in package agent.
+// Command serpe assembles a provider model and runtime.Runner, then renders
+// run-level events. The model–tool loop lives in package runtime.
 package main
 
 import (
@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/internal/bootstrap"
 )
@@ -37,17 +37,17 @@ func main() {
 	for stream.Next() {
 		ev := stream.Event()
 		switch ev.Kind {
-		case agent.EventModelStart:
+		case runtime.EventModelStart:
 			if !sawModelStart {
 				log.Print("model_start")
 				sawModelStart = true
 			}
-		case agent.EventModel:
+		case runtime.EventModel:
 			if !sawFirstToken && ev.Model.DisplayText() != "" {
 				log.Print("first_token")
 				sawFirstToken = true
 			}
-		case agent.EventToolStart:
+		case runtime.EventToolStart:
 			if ev.ToolCall != nil {
 				log.Printf("tool %s", ev.ToolCall.Name)
 			}
@@ -65,12 +65,12 @@ func main() {
 	log.Printf("stopped: %s", result.StopReason)
 }
 
-func render(ev agent.Event) {
+func render(ev runtime.Event) {
 	switch ev.Kind {
-	case agent.EventModel:
+	case runtime.EventModel:
 		fmt.Print(ev.Model.DisplayText())
-	case agent.EventRunEnd:
-		if ev.StopReason == agent.StopCompleted {
+	case runtime.EventRunEnd:
+		if ev.StopReason == runtime.StopCompleted {
 			fmt.Println()
 		}
 	}

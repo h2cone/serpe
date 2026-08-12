@@ -22,12 +22,11 @@ go.work.sum
 #.idea/
 
 # Docs
-docs/*
+docs/
 .tmp/
 *.tmp
 
-# Node / frontends
+# Node / UI
 node_modules/
 build/
 .react-router/
-

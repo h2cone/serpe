@@ -1,16 +1,11 @@
-package httpapi_test
+package runtime_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"sync"
-	"testing"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/runtime/sessions"
-	"github.com/h2cone/serpe/internal/httpapi"
 )
 
 // scriptedModel implements models.Model with a fixed sequence of responses.
@@ -19,7 +14,9 @@ type scriptedModel struct {
 	responses []*models.Response
 	errs      []error
 	calls     int
-	events    [][]models.Event
+	requests  []*models.Request
+	// optional per-call stream event override
+	events [][]models.Event
 }
 
 func (m *scriptedModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
@@ -41,6 +38,7 @@ func (m *scriptedModel) Complete(ctx context.Context, req *models.Request) (*mod
 func (m *scriptedModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.requests = append(m.requests, req.Clone())
 	idx := m.calls
 	m.calls++
 	if idx < len(m.errs) && m.errs[idx] != nil {
@@ -57,6 +55,24 @@ func (m *scriptedModel) Stream(ctx context.Context, req *models.Request) (models
 		events = eventsFromResponse(resp)
 	}
 	return models.NewStream(ctx, &sliceSource{events: events}), nil
+}
+
+func (m *scriptedModel) lastRequest() *models.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.requests) == 0 {
+		return nil
+	}
+	return m.requests[len(m.requests)-1].Clone()
+}
+
+func (m *scriptedModel) requestAt(i int) *models.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i < 0 || i >= len(m.requests) {
+		return nil
+	}
+	return m.requests[i].Clone()
 }
 
 type sliceSource struct {
@@ -88,22 +104,13 @@ func eventsFromResponse(resp *models.Response) []models.Event {
 			CreatedAt: resp.CreatedAt, Metadata: resp.Metadata, ProviderState: resp.ProviderState,
 		}},
 	}
+	if len(resp.Candidates) == 0 {
+		// ensure at least empty candidate zero for reducer
+	}
 	for _, cand := range resp.Candidates {
 		for partIdx, part := range cand.Content {
-			if part.Kind == models.ContentText && part.Text != nil && part.Text.Text != "" {
-				empty := models.Text("")
-				events = append(events, models.Event{
-					Kind: models.EventPartStart, CandidateIndex: cand.Index, PartIndex: partIdx, Part: empty,
-				})
-				events = append(events, models.Event{
-					Kind: models.EventPartDelta, CandidateIndex: cand.Index, PartIndex: partIdx,
-					Delta: models.Delta{Kind: models.DeltaText, Text: part.Text.Text},
-				})
-				events = append(events, models.Event{
-					Kind: models.EventPartEnd, CandidateIndex: cand.Index, PartIndex: partIdx,
-				})
-				continue
-			}
+			// Emit complete parts in part_start (no argument deltas) so the
+			// reducer accepts a single source of tool-call arguments.
 			start := part.Clone()
 			events = append(events, models.Event{
 				Kind: models.EventPartStart, CandidateIndex: cand.Index, PartIndex: partIdx, Part: start,
@@ -156,7 +163,6 @@ func textResponse(text string) *models.Response {
 			Content:      []models.Content{models.Text(text)},
 			FinishReason: models.FinishStop,
 		}},
-		Usage: models.Usage{TotalTokens: models.Some(int64(10))},
 	}
 }
 
@@ -178,48 +184,13 @@ func toolCallResponse(calls ...models.ToolCall) *models.Response {
 	}
 }
 
-type nowTool struct{}
-
-func (nowTool) Definition() models.Tool {
-	return models.Tool{
-		Name:        "now",
-		Description: "current time",
-		Parameters:  []byte(`{"type":"object","properties":{}}`),
-	}
+func withUsage(resp *models.Response, total int64) *models.Response {
+	resp.Usage.TotalTokens = models.Some(total)
+	return resp
 }
 
-func (nowTool) Execute(ctx context.Context, arguments json.RawMessage) (runtime.ToolOutput, error) {
-	return runtime.TextResult("12:00"), nil
-}
-
-func newTestServer(t *testing.T, model models.Model, tools []runtime.Tool, newID func() string) (*httpapi.Server, *sessions.Manager) {
-	return newTestServerWithStore(t, model, tools, newID, sessions.NewMemoryStore())
-}
-
-func newTestServerWithStore(t *testing.T, model models.Model, tools []runtime.Tool, newID func() string, store sessions.Store) (*httpapi.Server, *sessions.Manager) {
-	t.Helper()
-	if model == nil {
-		model = &scriptedModel{responses: []*models.Response{textResponse("hello")}}
-	}
-	if newID == nil {
-		newID = func() string { return "sess-1" }
-	}
-	runner, err := runtime.NewRunner(runtime.Config{Model: model, Tools: tools})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-	mgr, err := sessions.NewManager(store)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	srv, err := httpapi.New(httpapi.Config{
-		Runner:  runner,
-		Manager: mgr,
-		CWD:     "/tmp",
-		NewID:   newID,
-	})
-	if err != nil {
-		t.Fatalf("httpapi.New: %v", err)
-	}
-	return srv, mgr
+func withState(resp *models.Response, state *models.ProviderState) *models.Response {
+	resp.ProviderState = state
+	resp.Candidates[0].ProviderState = state
+	return resp
 }

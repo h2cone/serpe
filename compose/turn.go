@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // ErrConcurrentTurn reports that another turn modified the session transcript
@@ -17,7 +17,7 @@ var ErrConcurrentTurn = sessions.ErrConflict
 
 // Config constructs a TurnService.
 type Config struct {
-	Runner  *agent.Runner
+	Runner  *runtime.Runner
 	Manager *sessions.Manager
 }
 
@@ -28,7 +28,7 @@ type Config struct {
 // CAS-append). Callers see Send/Stream only; commit policy and CAS length
 // stay inside the package.
 type TurnService struct {
-	runner *agent.Runner
+	runner *runtime.Runner
 	mgr    *sessions.Manager
 }
 
@@ -46,7 +46,7 @@ func New(cfg Config) (*TurnService, error) {
 // Send runs a blocking turn. On success it returns the run result and the
 // committed session snapshot. See package doc for commit policy and return
 // shapes on failure paths.
-func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*agent.Result, *sessions.Session, error) {
+func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*runtime.Result, *sessions.Session, error) {
 	tx, err := s.begin(ctx, sessionID, prompt)
 	if err != nil {
 		return nil, nil, err
@@ -65,7 +65,7 @@ func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*agen
 }
 
 // Stream starts a streaming turn. The returned Turn wraps the inner
-// agent.Stream and runs the same commit transaction once before publishing a
+// runtime.Stream and runs the same commit transaction once before publishing a
 // terminal run_end event. As a fallback for streams that end without run_end,
 // it also finalizes on natural exhaustion. Close does not commit.
 //
@@ -116,7 +116,7 @@ func (s *TurnService) begin(ctx context.Context, sessionID, prompt string) (*tur
 	}, nil
 }
 
-func (tx *turnTxn) commit(ctx context.Context, result *agent.Result) (*sessions.Session, error) {
+func (tx *turnTxn) commit(ctx context.Context, result *runtime.Result) (*sessions.Session, error) {
 	suffix, err := suffixToCommit(result, tx.pre)
 	if err != nil {
 		return nil, err
@@ -127,14 +127,14 @@ func (tx *turnTxn) commit(ctx context.Context, result *agent.Result) (*sessions.
 	return tx.svc.mgr.AppendAt(ctx, tx.id, tx.pre, suffix...)
 }
 
-// Turn decorates agent.Stream with session commit at its terminal boundary.
-// One Turn has one drain loop (same single-reader rule as agent.Stream).
+// Turn decorates runtime.Stream with session commit at its terminal boundary.
+// One Turn has one drain loop (same single-reader rule as runtime.Stream).
 //
 // Prefer Err() once run_end is observed (or after drain) for the singular
 // outcome. CommitErr is a diagnostic side-channel only (when both inner and
 // commit fail, Err prefers the inner error).
 type Turn struct {
-	inner agent.Stream
+	inner runtime.Stream
 	tx    *turnTxn
 	ctx   context.Context
 
@@ -150,7 +150,7 @@ type Turn struct {
 // implementations that do not emit run_end.
 func (t *Turn) Next() bool {
 	if t.inner.Next() {
-		if t.inner.Event().Kind == agent.EventRunEnd {
+		if t.inner.Event().Kind == runtime.EventRunEnd {
 			t.finish()
 		}
 		return true
@@ -196,7 +196,7 @@ func streamCommitContext(ctx context.Context) context.Context {
 }
 
 // Event returns the current inner event.
-func (t *Turn) Event() agent.Event { return t.inner.Event() }
+func (t *Turn) Event() runtime.Event { return t.inner.Event() }
 
 // Err returns the terminal turn error: the inner stream error if any,
 // otherwise a commit failure. Once run_end is observed or Next returns false,
@@ -212,7 +212,7 @@ func (t *Turn) Err() error {
 }
 
 // Result returns the inner run result snapshot.
-func (t *Turn) Result() *agent.Result { return t.inner.Result() }
+func (t *Turn) Result() *runtime.Result { return t.inner.Result() }
 
 // Close closes the inner stream without committing.
 func (t *Turn) Close() error { return t.inner.Close() }
@@ -238,7 +238,7 @@ func (t *Turn) CommitErr() error {
 // suffixToCommit returns the transcript suffix to persist, or (nil, nil) when
 // the run did not complete successfully. A completed run with a short
 // transcript is an invariant violation.
-func suffixToCommit(result *agent.Result, pre int) ([]models.Message, error) {
+func suffixToCommit(result *runtime.Result, pre int) ([]models.Message, error) {
 	if result == nil || !result.Completed() {
 		return nil, nil
 	}

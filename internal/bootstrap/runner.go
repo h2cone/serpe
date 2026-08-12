@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/providers"
 )
@@ -34,7 +34,7 @@ func RunnerConfigFromEnv() RunnerConfig {
 }
 
 // NewRunner constructs the provider model and shared application tools.
-func NewRunner(cfg RunnerConfig) (*agent.Runner, error) {
+func NewRunner(cfg RunnerConfig) (*runtime.Runner, error) {
 	provider, err := providers.New(providers.Config{
 		Protocol: providers.OpenAIResponses,
 		APIKey:   cfg.APIKey,
@@ -51,9 +51,9 @@ func NewRunner(cfg RunnerConfig) (*agent.Runner, error) {
 	if now == nil {
 		now = time.Now
 	}
-	runner, err := agent.NewRunner(agent.Config{
+	runner, err := runtime.NewRunner(runtime.Config{
 		Model: model,
-		Tools: []agent.Tool{nowTool{now: now}},
+		Tools: []runtime.Tool{nowTool{now: now}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap runner: %w", err)
@@ -69,6 +69,6 @@ func (nowTool) Definition() models.Tool {
 	return models.NewTool("now", "Current wall-clock time in RFC 3339.", json.RawMessage(`{"type":"object","properties":{}}`))
 }
 
-func (t nowTool) Execute(_ context.Context, _ json.RawMessage) (agent.ToolOutput, error) {
-	return agent.TextResult(t.now().Format(time.RFC3339)), nil
+func (t nowTool) Execute(_ context.Context, _ json.RawMessage) (runtime.ToolOutput, error) {
+	return runtime.TextResult(t.now().Format(time.RFC3339)), nil
 }

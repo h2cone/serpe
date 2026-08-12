@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/compose"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // Example demonstrates create session → Send → assert committed suffix.
 func Example() {
 	model := &scriptedModel{responses: []*models.Response{textResponse("Let me look.")}}
-	runner, err := agent.NewRunner(agent.Config{Model: model})
+	runner, err := runtime.NewRunner(runtime.Config{Model: model})
 	if err != nil {
 		log.Fatal(err)
 	}

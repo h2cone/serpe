@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime/sessions"
 	"github.com/h2cone/serpe/internal/bootstrap"
 	"github.com/h2cone/serpe/internal/httpapi"
 )

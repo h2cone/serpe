@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/compose"
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // Config constructs a Server.
 type Config struct {
-	Runner  *agent.Runner     // required: agent execution
+	Runner  *runtime.Runner     // required: agent execution
 	Manager *sessions.Manager // required: sessions and turn persistence
 	CWD     string            // default cwd for new sessions; required non-empty
 	NewID   func() string     // optional session ID generator

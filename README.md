@@ -10,7 +10,7 @@ and repeating until the run stops.
 %%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
 flowchart TB
     %% Entrypoints
-    web["frontends/web (React Router 7)"]
+    web["ui/web (React Router 7)"]
     serve["cmd/serpe-server"]
     cli["cmd/serpe"]
 
@@ -18,8 +18,8 @@ flowchart TB
     httpapi["internal/httpapi"]
     compose["compose"]
     bootstrap["internal/bootstrap"]
-    sessions["core/sessions"]
-    agent["agent"]
+    runtime["runtime"]
+    sessions["runtime/sessions"]
     providers["core/providers"]
 
     %% Provider internals
@@ -33,20 +33,20 @@ flowchart TB
     jsonvalue["internal/jsonvalue"]
 
     cli --> bootstrap
-    cli --> agent
+    cli --> runtime
     serve --> bootstrap
     serve --> httpapi
     serve --> sessions
     web -.->|HTTP / SSE| httpapi
 
-    bootstrap --> agent
+    bootstrap --> runtime
     bootstrap --> providers
     httpapi --> compose
-    compose --> agent
+    compose --> runtime
     compose --> sessions
 
-    agent --> models
-    agent --> jsonvalue
+    runtime --> models
+    runtime --> jsonvalue
     sessions --> models
     providers --> models
     providers --> drivers
@@ -69,11 +69,11 @@ omitted).
 
 | Seam | Rule |
 |---|---|
-| `agent` | imports neither `core/sessions` nor `core/providers` — the loop is store- and provider-agnostic |
-| `compose` | the application seam: joins `agent.Runner` with `sessions.Manager` into one turn boundary |
+| `runtime/sessions` | imports neither `runtime` nor `core/providers` — the loop is store- and provider-agnostic |
+| `compose` | the application seam: joins `runtime.Runner` with `sessions.Manager` into one turn boundary |
 | `internal/httpapi` | takes one `Runner`/`Manager` pair and builds its own `TurnService` — CRUD and runs always share one store |
 | `internal/bootstrap` | owns provider/model/tool construction shared by both commands |
-| `internal/jsonvalue` | leaf used by `core/models`, `agent`, `internal/httpapi`, and provider internals |
+| `internal/jsonvalue` | leaf used by `core/models`, `runtime`, `internal/httpapi`, and provider internals |
 
 ## Modules
 
@@ -124,7 +124,7 @@ if err != nil {
 fmt.Println(response.Text())
 ```
 
-### `agent`
+### `runtime`
 
 `Runner.Run` (one-shot) and `Runner.Stream` (streaming) advance a pull
 state machine over the `Stream` interface: each `Next()` yields one `Event`.
@@ -145,14 +145,15 @@ flowchart LR
 ```
 
 Only completed runs are committable. Limit and stall stops return a partial
-result with a nil error; failures return a partial result through `Err()`.
+result with a nil error; failures return a partial result with a non-nil
+error (`Runner.Run`'s second return, or `Stream.Err()`).
 
 Minimal blocking run with a configured model and one tool:
 
 ```go
-runner, _ := agent.NewRunner(agent.Config{
+runner, _ := runtime.NewRunner(runtime.Config{
     Model: model,
-    Tools: []agent.Tool{now},
+    Tools: []runtime.Tool{now},
 })
 result, err := runner.Run(ctx, models.NewTextRequest("What time is it?"))
 if err == nil && result.Completed() {
@@ -160,7 +161,7 @@ if err == nil && result.Completed() {
 }
 ```
 
-### `core/sessions`
+### `runtime/sessions`
 
 `Session`; a `Manager` for validation, a versioned record codec, per-ID
 transactions, CRUD, forking, metadata changes, and appends; `MemoryStore` or
@@ -192,7 +193,7 @@ sequenceDiagram
     autonumber
     participant C as TurnService
     participant S as sessions.Manager
-    participant R as agent.Runner
+    participant R as runtime.Runner
 
     C->>S: Get(id)
     S-->>C: Session (transcript)
@@ -231,8 +232,8 @@ terminal errors, including commit failures. `Turn.Close()` never commits.
 
 The runs endpoint opens the turn (loading the session) before writing SSE
 headers, so lookup/validation errors still return as JSON. Browser-side wire
-types live in `frontends/web/app/lib/wire.ts`; Go and TypeScript tests share
-`api/examples` fixtures.
+types live in `ui/web/app/lib/wire.ts`; Go and TypeScript tests share
+`contracts` fixtures.
 
 ```go
 srv, _ := httpapi.New(httpapi.Config{
@@ -245,7 +246,7 @@ srv, _ := httpapi.New(httpapi.Config{
 go run ./cmd/serpe-server
 
 # Web dev server (proxies /api → http://127.0.0.1:8080)
-cd frontends/web && npm install && npm run dev
+cd ui/web && pnpm install && pnpm run dev
 ```
 
 | Env var | Used by | Meaning |
@@ -261,7 +262,7 @@ cd frontends/web && npm install && npm run dev
 ### `cmd/serpe`
 
 Thin CLI: arguments and event rendering only — wiring lives in
-`internal/bootstrap`, the model–tool loop in `agent`.
+`internal/bootstrap`, the model–tool loop in `runtime`.
 
 ```bash
 go run ./cmd/serpe "Summarize this repo"

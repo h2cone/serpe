@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/internal/jsonvalue"
 )
@@ -85,7 +85,7 @@ func toolCallToRecord(call *models.ToolCall) models.ContentRecord {
 	return rec
 }
 
-func toolOutputToDTO(out *agent.ToolOutput) toolResultDTO {
+func toolOutputToDTO(out *runtime.ToolOutput) toolResultDTO {
 	if out == nil {
 		return toolResultDTO{Content: []models.ContentRecord{}}
 	}

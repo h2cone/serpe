@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/h2cone/serpe/agent"
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +74,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess := turn.Session(); sess != nil {
-		stop := agent.StopCompleted
+		stop := runtime.StopCompleted
 		if res := turn.Result(); res != nil && res.StopReason != "" {
 			stop = res.StopReason
 		}
@@ -89,15 +89,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Budget / stall: run_end already emitted; no done, no second run_end.
 }
 
-func stopFromErr(err error, res *agent.Result) string {
+func stopFromErr(err error, res *runtime.Result) string {
 	if errors.Is(err, context.Canceled) {
-		return string(agent.StopCancelled)
+		return string(runtime.StopCancelled)
 	}
 	if res != nil && res.StopReason != "" {
 		return string(res.StopReason)
 	}
 	if errors.Is(err, sessions.ErrConflict) {
-		return string(agent.StopCompleted)
+		return string(runtime.StopCompleted)
 	}
-	return string(agent.StopFailed)
+	return string(runtime.StopFailed)
 }

@@ -3,14 +3,14 @@ package httpapi_test
 import (
 	"testing"
 
-	"github.com/h2cone/serpe/agent"
+	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/core/sessions"
+	"github.com/h2cone/serpe/runtime/sessions"
 	"github.com/h2cone/serpe/internal/httpapi"
 )
 
 func TestNewRequiresOneRunnerManagerCompositionRoot(t *testing.T) {
-	runner, err := agent.NewRunner(agent.Config{
+	runner, err := runtime.NewRunner(runtime.Config{
 		Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}},
 	})
 	if err != nil {
