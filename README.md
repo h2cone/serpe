@@ -130,7 +130,7 @@ fmt.Println(response.Text())
 
 ### `agent`
 
-Provides `Runner.Run` and `Runner.Stream`, `Tool`, `ToolOutput`, limits, and
+Provides `Runner.Run` and `Runner.NewStream`, `Tool`, `ToolOutput`, limits, and
 run, model, and tool lifecycle events. A completed result with a nil error is
 committable; budget or stall stops return a nil error with a `StopReason`.
 Failures after a run starts return a partial result together with a sentinel
@@ -230,8 +230,8 @@ srv, _ := httpapi.New(httpapi.Config{
 })
 ```
 
-The Go CLI and API server read `OPENAI_API_KEY`; `OPENAI_BASE_URL` and
-`OPENAI_DEFAULT_MODEL` are optional.
+The Go CLI and API server read `OPENAI_API_KEY`; `OPENAI_BASE_URL` is
+optional. `OPENAI_DEFAULT_MODEL` selects the model and must be set.
 
 ```bash
 # API (:8080 by default; MemoryStore unless SERPE_SESSIONS_DIR is set)

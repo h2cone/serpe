@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/h2cone/serpe/agent"
@@ -16,11 +15,8 @@ import (
 	"github.com/h2cone/serpe/core/providers"
 )
 
-const defaultOpenAIModel = "gpt-4.1-mini"
-
 // RunnerConfig contains the provider settings shared by command entrypoints.
-// An empty Model selects the application default. Now is an optional clock
-// seam for tests and embeddings.
+// Now is an optional clock seam for tests and embeddings.
 type RunnerConfig struct {
 	APIKey  string
 	BaseURL string
@@ -47,13 +43,9 @@ func NewRunner(cfg RunnerConfig) (*agent.Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap provider: %w", err)
 	}
-	modelName := strings.TrimSpace(cfg.Model)
-	if modelName == "" {
-		modelName = defaultOpenAIModel
-	}
-	model, err := provider.Model(modelName)
+	model, err := provider.Model(cfg.Model)
 	if err != nil {
-		return nil, fmt.Errorf("bootstrap model %q: %w", modelName, err)
+		return nil, fmt.Errorf("bootstrap model %q: %w", cfg.Model, err)
 	}
 	now := cfg.Now
 	if now == nil {

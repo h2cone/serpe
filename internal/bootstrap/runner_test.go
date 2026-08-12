@@ -6,11 +6,20 @@ import (
 	"time"
 )
 
-func TestNewRunnerAppliesSharedDefaults(t *testing.T) {
-	fixed := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
-	runner, err := NewRunner(RunnerConfig{Now: func() time.Time { return fixed }})
+func TestNewRunnerRequiresModel(t *testing.T) {
+	runner, err := NewRunner(RunnerConfig{})
+	if err == nil {
+		t.Fatal("NewRunner with empty model succeeded; want error")
+	}
+	if runner != nil {
+		t.Fatal("NewRunner returned non-nil runner alongside error")
+	}
+}
+
+func TestNewRunnerBindsExplicitModel(t *testing.T) {
+	runner, err := NewRunner(RunnerConfig{Model: "gpt-*"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NewRunner with explicit model: %v", err)
 	}
 	if runner == nil {
 		t.Fatal("NewRunner returned nil")

@@ -20,7 +20,7 @@ func TestStreamEventOrder(t *testing.T) {
 		textResponse("final"),
 	}}
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
-	stream, err := r.Stream(context.Background(), userReq("go"))
+	stream, err := r.NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestRunStreamEquivalence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stream, err := newRunner().Stream(context.Background(), userReq("go"))
+	stream, err := newRunner().NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestEventDefensiveCopy(t *testing.T) {
 		textResponse("done"),
 	}}
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
-	stream, err := r.Stream(context.Background(), userReq("go"))
+	stream, err := r.NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestCloseIdempotent(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{textResponse("x")}}
 	r, _ := agent.NewRunner(agent.Config{Model: model})
-	stream, err := r.Stream(context.Background(), userReq("go"))
+	stream, err := r.NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestCloseDuringModelStreamAcquisitionClosesReturnedStream(t *testing.T) {
 		stream:  returned,
 	}
 	r, _ := agent.NewRunner(agent.Config{Model: model})
-	stream, err := r.Stream(context.Background(), userReq("go"))
+	stream, err := r.NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestCancelContext(t *testing.T) {
 	}}
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{tool}})
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := r.Stream(ctx, userReq("go"))
+	stream, err := r.NewStream(ctx, userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestModelTurnAndToolIndex(t *testing.T) {
 		textResponse("ok"),
 	}}
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
-	stream, err := r.Stream(context.Background(), userReq("go"))
+	stream, err := r.NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}

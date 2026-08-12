@@ -8,7 +8,7 @@ import (
 
 // Run executes a complete agent run by draining Stream.
 func (r *Runner) Run(ctx context.Context, req *models.Request) (*Result, error) {
-	stream, err := r.Stream(ctx, req)
+	stream, err := r.NewStream(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -18,9 +18,9 @@ func (r *Runner) Run(ctx context.Context, req *models.Request) (*Result, error) 
 	return stream.Result(), stream.Err()
 }
 
-// Stream starts a pull-based agent run. The returned Stream is the sole state
-// machine; Run drains it to completion.
-func (r *Runner) Stream(ctx context.Context, req *models.Request) (Stream, error) {
+// NewStream starts a pull-based agent run. The returned Stream is the sole
+// state machine; Run drains it to completion.
+func (r *Runner) NewStream(ctx context.Context, req *models.Request) (Stream, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

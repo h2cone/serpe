@@ -89,7 +89,7 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 			name: "closed before completion",
 			run: func() (*agent.Result, error) {
 				runner, _ := agent.NewRunner(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("unused")}}})
-				stream, err := runner.Stream(context.Background(), userReq("go"))
+				stream, err := runner.NewStream(context.Background(), userReq("go"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -212,7 +212,7 @@ func TestAgentStreamTerminalTimingContract(t *testing.T) {
 			name: "completed run_end precedes exhaustion",
 			newStream: func(t *testing.T) agent.Stream {
 				runner, _ := agent.NewRunner(agent.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}}})
-				stream, err := runner.Stream(context.Background(), userReq("go"))
+				stream, err := runner.NewStream(context.Background(), userReq("go"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -227,7 +227,7 @@ func TestAgentStreamTerminalTimingContract(t *testing.T) {
 					toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
 				}}
 				runner, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}, Limits: agent.Limits{MaxModelTurns: 1}})
-				stream, err := runner.Stream(context.Background(), userReq("go"))
+				stream, err := runner.NewStream(context.Background(), userReq("go"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -239,7 +239,7 @@ func TestAgentStreamTerminalTimingContract(t *testing.T) {
 			name: "failure has no synthetic run_end",
 			newStream: func(t *testing.T) agent.Stream {
 				runner, _ := agent.NewRunner(agent.Config{Model: nilStreamModel{}})
-				stream, err := runner.Stream(context.Background(), userReq("go"))
+				stream, err := runner.NewStream(context.Background(), userReq("go"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -281,7 +281,7 @@ func TestEventPayloadContract(t *testing.T) {
 		textResponse("final"),
 	}}
 	r, _ := agent.NewRunner(agent.Config{Model: model, Tools: []agent.Tool{newStubTool("f", nil)}})
-	stream, err := r.Stream(context.Background(), userReq("go"))
+	stream, err := r.NewStream(context.Background(), userReq("go"))
 	if err != nil {
 		t.Fatal(err)
 	}
