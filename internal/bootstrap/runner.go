@@ -43,7 +43,7 @@ func NewRunner(cfg RunnerConfig) (*agent.Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap provider: %w", err)
 	}
-	model, err := provider.Model(cfg.Model)
+	model, err := provider.ResolveModel(cfg.Model)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap model %q: %w", cfg.Model, err)
 	}

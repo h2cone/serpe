@@ -54,8 +54,8 @@ func New(config shared.Config) (*Provider, error) {
 	return &Provider{config: config, client: client}, nil
 }
 
-// Model validates and binds an upstream model identifier.
-func (p *Provider) Model(upstreamModelID string) (models.Model, error) {
+// ResolveModel validates and binds an upstream model identifier.
+func (p *Provider) ResolveModel(upstreamModelID string) (models.Model, error) {
 	if _, err := defaultgoogle.ValidateModelID(upstreamModelID); err != nil {
 		return nil, err
 	}

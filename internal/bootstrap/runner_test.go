@@ -17,7 +17,7 @@ func TestNewRunnerRequiresModel(t *testing.T) {
 }
 
 func TestNewRunnerBindsExplicitModel(t *testing.T) {
-	runner, err := NewRunner(RunnerConfig{Model: "gpt-*"})
+	runner, err := NewRunner(RunnerConfig{Model: "gpt-5.6-luna"})
 	if err != nil {
 		t.Fatalf("NewRunner with explicit model: %v", err)
 	}

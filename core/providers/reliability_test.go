@@ -1336,7 +1336,7 @@ func TestOfficialGeminiCloseUnblocksConcurrentNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	model, err := provider.Model("gemini-test")
+	model, err := provider.ResolveModel("gemini-test")
 	if err != nil {
 		t.Fatalf("Model: %v", err)
 	}
@@ -1483,7 +1483,7 @@ func boundTestModel(t *testing.T, protocol providers.Protocol, server *httptest.
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	model, err := provider.Model(modelID)
+	model, err := provider.ResolveModel(modelID)
 	if err != nil {
 		t.Fatalf("Model: %v", err)
 	}

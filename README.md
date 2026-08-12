@@ -1,8 +1,8 @@
 # serpe
 
-Serpe is an agent harness. It owns the loop around a model: assembling
+Serpe is an agent harness: it owns the loop around a model — assembling
 context, streaming responses, executing tool calls, appending their results,
-and continuing until the run completes.
+and repeating until the run stops.
 
 ## Dependency graph
 
@@ -36,6 +36,7 @@ flowchart TB
     cli --> agent
     serve --> bootstrap
     serve --> httpapi
+    serve --> sessions
     web -.->|HTTP / SSE| httpapi
 
     bootstrap --> agent
@@ -63,29 +64,24 @@ flowchart TB
     models --> jsonvalue
 ```
 
-Solid arrows show the primary Go dependency paths. Direct imports already
-represented transitively are omitted for readability. The dotted arrow marks
-the Web frontend's HTTP/SSE boundary.
+Solid arrows are the primary Go dependency paths (transitive imports
+omitted).
 
-`agent` never imports `core/sessions` or `core/providers`. `compose` is the
-application seam that joins `agent.Runner` with `sessions.Manager` for a
-single turn boundary. `internal/httpapi` receives one
-`agent.Runner`/`sessions.Manager`
-pair and constructs that seam itself, so CRUD operations and turns cannot be
-wired to different stores. `internal/bootstrap` owns provider/model/tool
-construction shared by both commands. `internal/jsonvalue` is a leaf used by
-`core/models`, `agent`, `internal/httpapi`, and
-`core/providers/internal/shared`.
+| Seam | Rule |
+|---|---|
+| `agent` | imports neither `core/sessions` nor `core/providers` — the loop is store- and provider-agnostic |
+| `compose` | the application seam: joins `agent.Runner` with `sessions.Manager` into one turn boundary |
+| `internal/httpapi` | takes one `Runner`/`Manager` pair and builds its own `TurnService` — CRUD and runs always share one store |
+| `internal/bootstrap` | owns provider/model/tool construction shared by both commands |
+| `internal/jsonvalue` | leaf used by `core/models`, `agent`, `internal/httpapi`, and provider internals |
 
 ## Modules
 
 ### `core/models`
 
-Defines `Request`, `Response`, and the streaming `Event` type; `Tool`,
-`ToolCall`, and `ToolChoice`; the `Model` invocation interface; and `Content`
-validation, canonical encoding, and equality.
-
-Provider-neutral request construction:
+`Request`/`Response`, the streaming `Event` type, `Tool`/`ToolCall`/
+`ToolChoice`, the `Model` invocation interface, and canonical `Content`
+validation, encoding, and equality.
 
 ```go
 request := models.NewTextRequest("Summarize this repository.")
@@ -101,8 +97,8 @@ if err := request.Validate(); err != nil {
 
 ### `core/providers`
 
-Contains built-in and official SDK drivers; Anthropic, Google, and OpenAI
-protocol codecs; shared provider helpers; and HTTP, SSE, and SDK transports.
+Built-in and official SDK drivers; Anthropic, Google, and OpenAI codecs;
+shared helpers; HTTP/SSE/SDK transports.
 
 Minimal OpenAI Responses call (with `OPENAI_API_KEY` set):
 
@@ -114,7 +110,7 @@ provider, err := providers.New(providers.Config{
 if err != nil {
     log.Fatal(err)
 }
-model, err := provider.Model("gpt-4.1-mini")
+model, err := provider.ResolveModel("gpt-5.6-luna")
 if err != nil {
     log.Fatal(err)
 }
@@ -130,15 +126,28 @@ fmt.Println(response.Text())
 
 ### `agent`
 
-Provides `Runner.Run` and `Runner.NewStream`, `Tool`, `ToolOutput`, limits, and
-run, model, and tool lifecycle events. A completed result with a nil error is
-committable; budget or stall stops return a nil error with a `StopReason`.
-Failures after a run starts return a partial result together with a sentinel
-error, a `*models.Error`, or a context error; request-validation failures
-return no result.
+`Runner.Run` (one-shot) and `Runner.Stream` (streaming) advance a pull
+state machine over the `Stream` interface: each `Next()` yields one `Event`.
+The package also defines the `Tool`/`ToolOutput` contract, run limits, and
+run / model / tool lifecycle events.
 
-Minimal blocking run (with a `models.Model` and an `agent.Tool`
-implementation):
+```mermaid
+%%{init: {"themeVariables": {"fontSize": "20px"}}}%%
+flowchart LR
+    Start(["run_start"]) --> Model["Model turn · model_start / model_event* / model_end"]
+    Model --> Decide{"Answer or tool calls?"}
+    Decide -->|answer| Complete(["completed · run_end"])
+    Decide -->|tools| Tools["Tool batch · tool_start / tool_end"]
+    Tools -->|continue| Model
+    Decide -->|limit| Stop(["stopped · run_end"])
+    Tools -->|stalled| Stop
+    Decide -->|invalid| Fail(["Err() · no run_end"])
+```
+
+Only completed runs are committable. Limit and stall stops return a partial
+result with a nil error; failures return a partial result through `Err()`.
+
+Minimal blocking run with a configured model and one tool:
 
 ```go
 runner, _ := agent.NewRunner(agent.Config{
@@ -153,13 +162,9 @@ if err == nil && result.Completed() {
 
 ### `core/sessions`
 
-Provides `Session`; a `Manager` for validation, a versioned record codec,
-per-ID transactions, CRUD operations, forking, metadata changes, and appends;
-and opaque byte records through `MemoryStore` or `FileStore`. The file store
-writes `<root>/<id>.json` through a same-directory temporary file and atomic
-publish.
-
-Minimal use (in-process):
+`Session`; a `Manager` for validation, a versioned record codec, per-ID
+transactions, CRUD, forking, metadata changes, and appends; `MemoryStore` or
+`FileStore` (atomic temp-file publish, `<root>/<id>.json`).
 
 ```go
 manager, _ := sessions.NewManager(sessions.NewMemoryStore())
@@ -170,59 +175,64 @@ _, _ = manager.Append(ctx, created.ID,
 )
 ```
 
-Disk-backed store (persistent across restarts; single-process use):
-
 ```go
-// The root directory must already exist and be writable.
+// Root must already exist and be writable; single-process use.
 store, _ := sessions.NewFileStore("/var/lib/serpe/sessions")
 manager, _ := sessions.NewManager(store)
 ```
 
-Session IDs contain 1–128 ASCII characters from `[A-Za-z0-9._-]`; `.` and
-`..`, as well as Windows reserved device names, are not allowed.
-
-Custom `Store` implementations persist opaque `[]byte` records keyed by ID
-and must not decode `Session`; `Manager` owns the versioned payload. Session
-changes use intent-specific methods such as `SetCWD`, `PatchMetadata`,
-`Append`, and `AppendAt`; there is no public arbitrary-mutation `Update`
-method.
+- IDs: 1–128 ASCII `[A-Za-z0-9._-]`; `.`, `..`, and Windows reserved device names are rejected.
+- Custom `Store`s persist opaque `[]byte` records keyed by ID and never decode `Session`; `Manager` owns validation and the versioned payload.
+- Mutations are intent-specific (`SetCWD`, `PatchMetadata`, `Append`, `AppendAt`) — there is no generic `Update`.
 
 ### `compose`
 
-Provides `TurnService.Send` and `TurnService.Stream`, plus the `Turn` stream
-wrapper with `Next`, `Event`, `Err`, `Result`, `Session`, `CommitErr`, and
-`Close`.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as TurnService
+    participant S as sessions.Manager
+    participant R as agent.Runner
 
-Turn boundary: `Get` → build request → `Run`/`Stream` → commit suffix only when
-`err == nil && result.Completed()`, via `Manager.AppendAt` (optimistic length
-compare-and-swap). A conflict returns `ErrConcurrentTurn`, an alias of
-`sessions.ErrConflict`. For streaming runs, the commit decision occurs before
-`run_end` is published, so callers do not need an extra `Next()` call to
-persist the result. After observing `run_end` or exhausting the stream, callers
-use `Turn.Err()` to check terminal errors, including commit failures.
-`Turn.Close()` never commits.
+    C->>S: Get(id)
+    S-->>C: Session (transcript)
+    C->>R: Run / Stream(request)
+    R-->>C: result
+
+    alt err == nil && result.Completed()
+        C->>S: AppendAt(id, suffix)
+        Note over S: optimistic length CAS —<br/>conflict → ErrConcurrentTurn (= sessions.ErrConflict)
+    else budget stop · stall · failure · cancellation
+        Note over C: no commit — transcript untouched
+    end
+```
 
 ```go
 svc, _ := compose.New(compose.Config{Runner: runner, Manager: manager})
 result, session, err := svc.Send(ctx, "sess-1", "What is in this repo?")
-// or: turn, _ := svc.Stream(ctx, "sess-1", prompt); for turn.Next() { ... }
+// or streaming:
+turn, _ := svc.Stream(ctx, "sess-1", prompt)
+for turn.Next() { /* events */ }
 ```
+
+Streaming: the commit decision happens before `run_end` is published, so no
+extra `Next()` is needed to persist; after `run_end`, check `Turn.Err()` for
+terminal errors, including commit failures. `Turn.Close()` never commits.
 
 ### `internal/httpapi` + `cmd/serpe-server`
 
-The server exposes `GET /api/health`; `GET` and `POST` on `/api/sessions`;
-`GET`, `PATCH`, and `DELETE` on `/api/sessions/{id}`;
-`POST /api/sessions/{id}/fork`; and `POST /api/runs`. The runs endpoint returns
-a `text/event-stream` backed by `TurnService.Stream`.
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/health` | |
+| GET · POST | `/api/sessions` | list · create |
+| GET · PATCH · DELETE | `/api/sessions/{id}` | |
+| POST | `/api/sessions/{id}/fork` | |
+| POST | `/api/runs` | `text/event-stream` over `TurnService.Stream` |
 
-`httpapi.New` takes one `agent.Runner` and one `sessions.Manager`, then
-constructs its own `TurnService`, ensuring that CRUD operations and runs use
-the same store. The runs endpoint opens the turn—and therefore loads the
-session—before writing SSE headers, so lookup and request-validation errors
-can still be returned as JSON. The executable TypeScript contract in
-`frontends/web/app/lib/wire.ts` validates SSE frames and session REST DTOs at
-the browser boundary. Go and TypeScript tests consume the same concrete
-fixtures under `api/examples`.
+The runs endpoint opens the turn (loading the session) before writing SSE
+headers, so lookup/validation errors still return as JSON. Browser-side wire
+types live in `frontends/web/app/lib/wire.ts`; Go and TypeScript tests share
+`api/examples` fixtures.
 
 ```go
 srv, _ := httpapi.New(httpapi.Config{
@@ -230,24 +240,32 @@ srv, _ := httpapi.New(httpapi.Config{
 })
 ```
 
-The Go CLI and API server read `OPENAI_API_KEY`; `OPENAI_BASE_URL` is
-optional. `OPENAI_DEFAULT_MODEL` selects the model and must be set.
-
 ```bash
 # API (:8080 by default; MemoryStore unless SERPE_SESSIONS_DIR is set)
-go run ./cmd/serpe-server   # :8080
+go run ./cmd/serpe-server
 
-# Web development server (proxies /api to http://127.0.0.1:8080 by default)
+# Web dev server (proxies /api → http://127.0.0.1:8080)
 cd frontends/web && npm install && npm run dev
 ```
 
-Set `SERPE_API_ORIGIN` to point Web development, SSR, and the production proxy
-at a backend other than `http://127.0.0.1:8080`.
+| Env var | Used by | Meaning |
+|---|---|---|
+| `OPENAI_API_KEY` | CLI, server | required |
+| `OPENAI_BASE_URL` | CLI, server | optional override |
+| `OPENAI_DEFAULT_MODEL` | CLI, server | required — selects the model |
+| `SERPE_ADDR` | server | listen address (default `:8080`) |
+| `SERPE_CWD` | server | default session CWD (default: process cwd) |
+| `SERPE_SESSIONS_DIR` | server | file-store root; unset → MemoryStore |
+| `SERPE_API_ORIGIN` | web | backend origin (default `http://127.0.0.1:8080`) |
 
 ### `cmd/serpe`
 
-Handles CLI arguments and event rendering; shared provider/model/tool wiring
-lives in `internal/bootstrap`, while the model-tool loop lives in `agent`.
+Thin CLI: arguments and event rendering only — wiring lives in
+`internal/bootstrap`, the model–tool loop in `agent`.
+
+```bash
+go run ./cmd/serpe "Summarize this repo"
+```
 
 ## License
 

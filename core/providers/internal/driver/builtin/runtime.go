@@ -49,8 +49,8 @@ func NewProvider(config shared.Config, adapter Adapter) *Provider {
 	})}
 }
 
-// Model validates and binds an upstream model identifier.
-func (p *Provider) Model(upstreamModelID string) (models.Model, error) {
+// ResolveModel validates and binds an upstream model identifier.
+func (p *Provider) ResolveModel(upstreamModelID string) (models.Model, error) {
 	routeID, err := upstreamModelID, error(nil)
 	if p.adapter.BindModel != nil {
 		routeID, err = p.adapter.BindModel(upstreamModelID)

@@ -42,7 +42,8 @@ const (
 	phaseDone
 )
 
-// runStream is the pull scheduler. It owns the phase order, the lock
+// runStateMachine drives one run as a pull-based state machine. The phase
+// field is the state; step is the transition function. It owns the lock
 // protocol, Close, and the events published to the caller. Run policy
 // (terminal classification, tool choice, budgets, stall detection) lives in
 // policy.go and run_state.go; this type applies decisions, never re-derives
@@ -57,7 +58,7 @@ const (
 //     publishing events.
 //   - stopReason is written only through runRecord.setStopReason; the first
 //     writer wins so Close cannot overwrite a policy stop.
-type runStream struct {
+type runStateMachine struct {
 	runner *Runner
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -83,7 +84,7 @@ type runStream struct {
 	batch          *toolBatch
 }
 
-func (s *runStream) Next() bool {
+func (s *runStateMachine) Next() bool {
 	s.mu.Lock()
 	// A controlled stop that has been decided (phaseRunEnd/phaseDone) must
 	// still emit its run_end even if a concurrent Close set closed/finished;
@@ -132,13 +133,13 @@ func (s *runStream) Next() bool {
 	}
 }
 
-func (s *runStream) isControlledStopReady() bool {
+func (s *runStateMachine) isControlledStopReady() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.phase == phaseRunEnd || s.phase == phaseDone
 }
 
-func (s *runStream) fail(err error) {
+func (s *runStateMachine) fail(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
@@ -160,7 +161,7 @@ func (s *runStream) fail(err error) {
 // step returns (event, continueWithoutEvent, err).
 // When continueWithoutEvent is true, Next should call step again.
 // When event is nil and continue is false, the stream is exhausted.
-func (s *runStream) step() (*Event, bool, error) {
+func (s *runStateMachine) step() (*Event, bool, error) {
 	s.mu.Lock()
 	p := s.phase
 	s.mu.Unlock()
@@ -208,7 +209,7 @@ func (s *runStream) step() (*Event, bool, error) {
 	}
 }
 
-func (s *runStream) beginModelTurn() (*Event, bool, error) {
+func (s *runStateMachine) beginModelTurn() (*Event, bool, error) {
 	s.mu.Lock()
 	turn, ok := s.budget.beginModelTurn()
 	if !ok {
@@ -252,7 +253,7 @@ func (s *runStream) beginModelTurn() (*Event, bool, error) {
 	return newModelStartEvent(turn), false, nil
 }
 
-func (s *runStream) consumeModelEvent() (*Event, bool, error) {
+func (s *runStateMachine) consumeModelEvent() (*Event, bool, error) {
 	s.mu.Lock()
 	ms := s.turn.active()
 	turn := s.budget.modelTurns
@@ -295,13 +296,13 @@ func (s *runStream) consumeModelEvent() (*Event, bool, error) {
 // detachTurn clears the active model turn stream under the lock so a
 // concurrent close path cannot double-close the stream the caller is
 // finishing. The caller closes the detached stream exactly once.
-func (s *runStream) detachTurn() {
+func (s *runStateMachine) detachTurn() {
 	s.mu.Lock()
 	s.turn.detach()
 	s.mu.Unlock()
 }
 
-func (s *runStream) emitModelEnd() (*Event, bool, error) {
+func (s *runStateMachine) emitModelEnd() (*Event, bool, error) {
 	s.mu.Lock()
 	turn := s.budget.modelTurns
 	resp := s.record.lastResponse()
@@ -313,7 +314,7 @@ func (s *runStream) emitModelEnd() (*Event, bool, error) {
 // applyAfterModel applies the policy decision for the finished model turn:
 // commit the assistant turn, stop, or schedule tool execution. All business
 // decisions come from policy.decideAfterModel and runBudget.
-func (s *runStream) applyAfterModel() error {
+func (s *runStateMachine) applyAfterModel() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -350,7 +351,7 @@ func (s *runStream) applyAfterModel() error {
 	return nil
 }
 
-func (s *runStream) emitToolStart() (*Event, bool, error) {
+func (s *runStateMachine) emitToolStart() (*Event, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -365,7 +366,7 @@ func (s *runStream) emitToolStart() (*Event, bool, error) {
 	return newToolStartEvent(turn, idx, &call), false, nil
 }
 
-func (s *runStream) executeTool() (*Event, bool, error) {
+func (s *runStateMachine) executeTool() (*Event, bool, error) {
 	s.mu.Lock()
 	call, ok := s.batch.current()
 	if !ok {
@@ -397,7 +398,7 @@ func (s *runStream) executeTool() (*Event, bool, error) {
 	return newToolEndEvent(turn, idx, &call, &result), false, nil
 }
 
-func (s *runStream) invokeTool(call models.ToolCall) (ToolOutput, models.Content, error) {
+func (s *runStateMachine) invokeTool(call models.ToolCall) (ToolOutput, models.Content, error) {
 	reg, ok := s.runner.tools.lookup(call.Name)
 	if !ok {
 		result := ErrorResult(fmt.Sprintf("unknown tool %q", call.Name))
@@ -422,7 +423,7 @@ func (s *runStream) invokeTool(call models.ToolCall) (ToolOutput, models.Content
 	return result, content, nil
 }
 
-func (s *runStream) finishToolBatch() error {
+func (s *runStateMachine) finishToolBatch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -447,25 +448,25 @@ func (s *runStream) finishToolBatch() error {
 	return nil
 }
 
-func (s *runStream) Event() Event {
+func (s *runStateMachine) Event() Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.current.clone()
 }
 
-func (s *runStream) Err() error {
+func (s *runStateMachine) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
 }
 
-func (s *runStream) Result() *Result {
+func (s *runStateMachine) Result() *Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.record.snapshot(s.conversation, &s.budget)
 }
 
-func (s *runStream) Close() error {
+func (s *runStateMachine) Close() error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -484,7 +485,7 @@ func (s *runStream) Close() error {
 }
 
 // modelTurnHandle owns the active model stream for the current turn. All
-// access happens under runStream.mu. close is idempotent and detaches, so
+// access happens under runStateMachine.mu. close is idempotent and detaches, so
 // concurrent close paths (fail, Close, turn end) cannot double-close.
 type modelTurnHandle struct {
 	stream models.Stream

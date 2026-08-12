@@ -90,7 +90,7 @@ func TestBaseURLVersionSuffixOverridesProtocolDefault(t *testing.T) {
 					if err != nil {
 						t.Fatalf("New: %v", err)
 					}
-					model, err := provider.Model(test.modelID)
+					model, err := provider.ResolveModel(test.modelID)
 					if err != nil {
 						t.Fatalf("Model: %v", err)
 					}
@@ -182,7 +182,7 @@ func runConformanceCase(t *testing.T, protocol providers.Protocol, driver provid
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	model, err := provider.Model(modelID)
+	model, err := provider.ResolveModel(modelID)
 	if err != nil {
 		t.Fatalf("Model: %v", err)
 	}

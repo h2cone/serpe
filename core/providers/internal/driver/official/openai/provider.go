@@ -61,8 +61,8 @@ func requestOptions(config shared.Config) []option.RequestOption {
 	return opts
 }
 
-// Model validates and binds an upstream model identifier.
-func (p *Provider) Model(upstreamModelID string) (models.Model, error) {
+// ResolveModel validates and binds an upstream model identifier.
+func (p *Provider) ResolveModel(upstreamModelID string) (models.Model, error) {
 	if err := shared.ValidateModelID(upstreamModelID, "openai"); err != nil {
 		return nil, err
 	}

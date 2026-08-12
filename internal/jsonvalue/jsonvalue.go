@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 // Canonical returns a stable encoding of one JSON value.
@@ -40,16 +41,36 @@ func CanonicalObject(raw []byte) ([]byte, error) {
 }
 
 // IsObject reports whether raw contains exactly one JSON object.
+//
+// It validates with a single scan (json.Valid) plus an O(1) first-token
+// check, instead of decoding and re-encoding the whole value. json.Valid
+// rejects trailing values, so the "exactly one" requirement holds.
 func IsObject(raw []byte) bool {
-	_, err := CanonicalObject(raw)
-	return err == nil
+	for _, c := range raw {
+		switch c {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '{':
+			return json.Valid(raw)
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // Equal compares two JSON values after stable encoding.
+//
+// Identical bytes short-circuit without decoding; only differing encodings
+// fall back to decoded-tree comparison, which is order-independent and
+// preserves number lexemes (json.Number), matching the canonical form.
 func Equal(left, right []byte) bool {
-	leftCanonical, leftErr := Canonical(left)
-	rightCanonical, rightErr := Canonical(right)
-	return leftErr == nil && rightErr == nil && bytes.Equal(leftCanonical, rightCanonical)
+	if bytes.Equal(left, right) {
+		return true
+	}
+	leftValue, leftErr := decode(left)
+	rightValue, rightErr := decode(right)
+	return leftErr == nil && rightErr == nil && reflect.DeepEqual(leftValue, rightValue)
 }
 
 func decode(raw []byte) (any, error) {

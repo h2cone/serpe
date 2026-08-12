@@ -26,7 +26,7 @@ func TestDriverNormalization(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Driver %q: New: %v", driver, err)
 		}
-		if _, err := provider.Model("model-1"); err != nil {
+		if _, err := provider.ResolveModel("model-1"); err != nil {
 			t.Fatalf("Driver %q: Model: %v", driver, err)
 		}
 	}
@@ -62,7 +62,7 @@ func TestOfficialDriverFactory(t *testing.T) {
 			if protocol == providers.GeminiGenerateContent {
 				modelID = "gemini-2.0-flash"
 			}
-			model, err := provider.Model(modelID)
+			model, err := provider.ResolveModel(modelID)
 			if err != nil || model == nil {
 				t.Fatalf("Model = %#v, %v", model, err)
 			}
@@ -124,7 +124,7 @@ func TestPoisonEnvDoesNotAffectOfficialRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			model, err := provider.Model(modelID)
+			model, err := provider.ResolveModel(modelID)
 			if err != nil {
 				t.Fatalf("Model: %v", err)
 			}
@@ -191,7 +191,7 @@ func TestOfficialSDKDisablesRetry(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			model, err := provider.Model(modelID)
+			model, err := provider.ResolveModel(modelID)
 			if err != nil {
 				t.Fatalf("Model: %v", err)
 			}

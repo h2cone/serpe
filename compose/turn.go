@@ -82,7 +82,7 @@ func (s *TurnService) Stream(ctx context.Context, sessionID, prompt string) (*Tu
 	if err != nil {
 		return nil, err
 	}
-	inner, err := s.runner.NewStream(ctx, tx.req)
+	inner, err := s.runner.Stream(ctx, tx.req)
 	if err != nil {
 		return nil, err
 	}

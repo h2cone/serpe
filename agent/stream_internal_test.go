@@ -14,7 +14,7 @@ import (
 // through the public API.
 func TestRunEndSurvivesCloseAfterControlledStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &runStream{
+	s := &runStateMachine{
 		ctx:    ctx,
 		cancel: cancel,
 		phase:  phaseRunStart,
@@ -52,7 +52,7 @@ func TestRunEndSurvivesCloseAfterControlledStop(t *testing.T) {
 // surface a cancelled result.
 func TestCloseMidRunSuppressesRunEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &runStream{
+	s := &runStateMachine{
 		ctx:    ctx,
 		cancel: cancel,
 		phase:  phaseRunStart,

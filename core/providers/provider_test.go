@@ -28,7 +28,7 @@ func TestNewAndModelDoNotUseNetwork(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			upstreamModel, err := provider.Model("upstream-model")
+			upstreamModel, err := provider.ResolveModel("upstream-model")
 			if err != nil || upstreamModel == nil {
 				t.Fatalf("Model = %#v, %v", upstreamModel, err)
 			}
@@ -68,7 +68,7 @@ func TestConfigAndModelValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, modelID := range []string{"", "models/gemini", "..", "gemini?alt=x", `gemini\\evil`, "gemini%2fescape", "gemini:action"} {
-		if _, bindErr := provider.Model(modelID); bindErr == nil {
+		if _, bindErr := provider.ResolveModel(modelID); bindErr == nil {
 			t.Errorf("Gemini Model(%q) accepted", modelID)
 		} else {
 			var modelErr *models.Error
@@ -77,7 +77,7 @@ func TestConfigAndModelValidation(t *testing.T) {
 			}
 		}
 	}
-	if _, err := provider.Model("gemini-2.0-flash"); err != nil {
+	if _, err := provider.ResolveModel("gemini-2.0-flash"); err != nil {
 		t.Fatalf("valid Gemini ID rejected: %v", err)
 	}
 }

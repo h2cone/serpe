@@ -26,7 +26,7 @@ func ExampleNew() {
 	if err != nil {
 		panic(err)
 	}
-	upstreamModel, err := provider.Model("example-model")
+	upstreamModel, err := provider.ResolveModel("example-model")
 	if err != nil {
 		panic(err)
 	}
@@ -46,7 +46,7 @@ func ExampleProvider_stream() {
 	defer server.Close()
 
 	provider, _ := providers.New(providers.Config{Protocol: providers.OpenAIChatCompletions, BaseURL: server.URL, HTTPClient: server.Client()})
-	upstreamModel, _ := provider.Model("example-model")
+	upstreamModel, _ := provider.ResolveModel("example-model")
 	stream, err := upstreamModel.Stream(context.Background(), models.NewTextRequest("say hello"))
 	if err != nil {
 		panic(err)
@@ -78,7 +78,7 @@ func ExampleNew_officialSDK() {
 	if err != nil {
 		panic(err)
 	}
-	upstreamModel, err := provider.Model("example-model")
+	upstreamModel, err := provider.ResolveModel("example-model")
 	if err != nil {
 		panic(err)
 	}

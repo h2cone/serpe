@@ -28,7 +28,7 @@ func main() {
 		prompt = os.Args[1]
 	}
 
-	stream := must(runner.NewStream(ctx, models.NewTextRequest(prompt)))
+	stream := must(runner.Stream(ctx, models.NewTextRequest(prompt)))
 	defer stream.Close()
 
 	// model_start: after model.Stream returns (HTTP headers ready).
