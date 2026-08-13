@@ -16,10 +16,10 @@ func NewOpenAIResponses(config shared.Config) *Provider {
 			return responses.EncodeRequest(modelID, req, stream, config.Policy.LenientMapping, config.Limits.MaxProviderStateBytes)
 		},
 		Decode: func(raw []byte, requestID, _ string, config shared.Config) (*models.Response, error) {
-			return responses.DecodeResponseJSON(raw, requestID, config.Limits.MaxProviderStateBytes)
+			return responses.DecodeResponseJSONWithLimits(raw, requestID, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
 		},
-		NewSource: func(reader *sse.Reader, requestID, modelID string, config shared.Config) models.EventSource {
-			return responses.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes)
+		NewSource: func(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
+			return responses.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, limits))
 		},
 	})
 }

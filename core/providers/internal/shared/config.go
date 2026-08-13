@@ -18,10 +18,17 @@ type AuthenticateFunc func(context.Context, *http.Request) error
 
 // Limits are normalized positive byte limits.
 type Limits struct {
-	MaxResponseBytes      int64
-	MaxErrorResponseBytes int64
-	MaxSSEEventBytes      int64
-	MaxProviderStateBytes int64
+	MaxRequestBytes        int64
+	MaxResponseBytes       int64
+	MaxStreamResponseBytes int64
+	MaxErrorResponseBytes  int64
+	MaxSSEEventBytes       int64
+	MaxProviderStateBytes  int64
+	MaxToolCalls           int
+	MaxCallIDBytes         int64
+	MaxToolNameBytes       int64
+	MaxArgumentsBytes      int64
+	MaxBatchArgumentBytes  int64
 }
 
 // Policy is a normalized internal policy snapshot.

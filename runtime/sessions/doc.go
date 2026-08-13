@@ -9,15 +9,17 @@
 // Concurrency: a Manager serializes composite writes per session ID, so
 // concurrent updates to the same session never lose messages, while different
 // sessions proceed in parallel. AppendAt provides optimistic CAS-append when
-// the caller observed a transcript length before a turn. Cross-process
-// coordination is out of scope; a Store implementation is responsible only
-// for opaque-record atomicity and byte ownership (FileStore.Create is
-// exclusive within a process and uses non-clobbering publish).
+// the caller observed a transcript length before a turn. Store implementations
+// are responsible for opaque-record atomicity, byte ownership, and lifecycle;
+// a successful NewManager call takes exclusive ownership and Manager.Close
+// releases the Store.
 //
-// Store implementations: MemoryStore (in-process) and FileStore (one
-// versioned opaque record per session under a root directory, atomic
-// temp+rename writes). Manager is the single owner of Session validation and
-// the record codec. Session IDs use one portable alphabet for every Store (see
-// Session). Application-level Get→Run→commit-on-Completed wiring lives in
-// package compose, not here.
+// Store implementations: MemoryStore is in-process. FileStore holds a
+// cross-process exclusive maintenance lock, pins a pre-existing private root,
+// and atomically publishes one versioned opaque record per session using its
+// v2 lowercase filename codec. Legacy layouts require explicit offline
+// MaintainFileStore migration. Manager is the single owner of Session
+// validation and the record codec. Session IDs use one portable alphabet for
+// every Store (see Session). Application-level Get→Run→commit-on-Completed
+// wiring lives in package compose, not here.
 package sessions

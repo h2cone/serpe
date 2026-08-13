@@ -42,11 +42,11 @@ func TestDecodeErrorXAIStringError(t *testing.T) {
 	}
 }
 
-func TestDecodeErrorPlainTextSnippet(t *testing.T) {
+func TestDecodeErrorPlainTextIsOpaque(t *testing.T) {
 	t.Parallel()
 	err := DecodeError(jsonResponse(502, "Bad Gateway from edge"), "openai", "stream", 4096, nil)
 	me := mustModelError(t, err)
-	if me.Message != "Bad Gateway from edge" {
+	if me.Message != "provider returned a non-JSON error response" {
 		t.Fatalf("message = %q", me.Message)
 	}
 }

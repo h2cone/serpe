@@ -97,7 +97,7 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) (cont
 		if err := json.Unmarshal(message.ProviderState.Data, &state); err != nil || state.Role != "model" || len(state.Parts) == 0 {
 			return contentWire{}, invalidState("Gemini provider state must be a model Content object", err)
 		}
-		projected, decodeErr := decodeResponse(responseWire{Candidates: []candidateWire{{Content: state, FinishReason: "STOP"}}}, "", "", stateLimit)
+		projected, decodeErr := decodeResponse(responseWire{Candidates: []candidateWire{{Content: state, FinishReason: "STOP"}}}, "", "", stateLimit, shared.NewToolCallGuard(shared.DefaultToolCallLimits()))
 		if decodeErr != nil || len(projected.Candidates) != 1 || !shared.EquivalentContent(projected.Candidates[0].Content, message.Content) {
 			return contentWire{}, invalidState("Gemini provider state does not match assistant content", decodeErr)
 		}
@@ -135,11 +135,25 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) (cont
 				return contentWire{}, unsupported("Gemini tool results must be in user messages")
 			}
 			var text strings.Builder
+			var media []functionResponsePartWire
 			for _, child := range block.ToolResult.Content {
-				if child.Kind != models.ContentText {
-					return contentWire{}, unsupported("Gemini tool results support text only")
+				switch child.Kind {
+				case models.ContentText:
+					text.WriteString(child.Text.Text)
+				case models.ContentImage:
+					if child.Image.URI != "" {
+						return contentWire{}, unsupported("Gemini tool-result images must contain inline bytes")
+					}
+					if child.Image.Detail != "" {
+						return contentWire{}, unsupported("Gemini tool-result images do not support detail hints")
+					}
+					media = append(media, functionResponsePartWire{InlineData: &functionResponseBlobWire{
+						MIMEType: child.Image.MIMEType,
+						Data:     base64.StdEncoding.EncodeToString(child.Image.Data),
+					}})
+				default:
+					return contentWire{}, unsupported("Gemini tool results support text and inline image content only")
 				}
-				text.WriteString(child.Text.Text)
 			}
 			response := json.RawMessage(text.String())
 			if !shared.JSONObject(response) {
@@ -148,7 +162,7 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) (cont
 					IsError bool   `json:"isError,omitempty"`
 				}{Result: text.String(), IsError: block.ToolResult.IsError})
 			}
-			result.Parts = append(result.Parts, partWire{FunctionResponse: &functionResponseWire{ID: block.ToolResult.CallID, Name: block.ToolResult.Name, Response: response}})
+			result.Parts = append(result.Parts, partWire{FunctionResponse: &functionResponseWire{ID: block.ToolResult.CallID, Name: block.ToolResult.Name, Response: response, Parts: media}})
 		case models.ContentReasoningSummary:
 			return contentWire{}, unsupported("Gemini reasoning summaries require same-protocol provider state")
 		case models.ContentRefusal:

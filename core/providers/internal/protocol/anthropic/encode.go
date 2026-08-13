@@ -86,7 +86,7 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) ([]js
 			output = append(output, append(json.RawMessage(nil), raw...))
 		}
 		stop := "end_turn"
-		projected, decodeErr := decodeResponse(messageWire{Content: rawBlocks, StopReason: &stop}, "", stateLimit)
+		projected, decodeErr := decodeResponse(messageWire{Content: rawBlocks, StopReason: &stop}, "", stateLimit, shared.NewToolCallGuard(shared.DefaultToolCallLimits()))
 		if decodeErr != nil || len(projected.Candidates) != 1 || !shared.EquivalentContent(projected.Candidates[0].Content, message.Content) {
 			return nil, invalidState("Anthropic provider state does not match assistant content", decodeErr)
 		}

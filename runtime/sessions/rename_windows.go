@@ -6,17 +6,30 @@ import (
 	"errors"
 	"os"
 	"syscall"
+	"time"
 )
 
-// Windows ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION, returned when a
-// concurrent reader still holds the destination open during rename-replace.
 const (
 	windowsAccessDenied     syscall.Errno = 5
 	windowsSharingViolation syscall.Errno = 32
 )
 
-// isTransientRenameError reports whether err is a Windows rename conflict
-// that may clear once concurrent readers release the destination.
+func renameReplace(root *os.Root, oldName, newName string) error {
+	const attempts = 20
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err = root.Rename(oldName, newName)
+		if err == nil {
+			return nil
+		}
+		if !isTransientRenameError(err) || attempt+1 == attempts {
+			return err
+		}
+		time.Sleep(time.Duration(5*(attempt+1)) * time.Millisecond)
+	}
+	return err
+}
+
 func isTransientRenameError(err error) bool {
 	var errno syscall.Errno
 	if errors.As(err, &errno) {

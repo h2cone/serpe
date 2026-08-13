@@ -23,6 +23,7 @@ var capabilities = models.Capabilities(
 	models.CapabilityReasoningSummary,
 	models.CapabilityProviderState,
 	models.CapabilityMultipleCandidates,
+	models.CapabilityToolResultImage,
 )
 
 // ProtocolCapabilities returns the adapter capability ceiling.
@@ -30,11 +31,19 @@ func ProtocolCapabilities() models.CapabilitySet { return capabilities }
 
 // DecodeResponseJSON decodes a full Gemini generateContent JSON body.
 func DecodeResponseJSON(data []byte, requestID, fallbackModel string, stateLimit int64) (*models.Response, error) {
+	return DecodeResponseJSONWithLimits(data, requestID, fallbackModel, stateLimit, shared.DefaultToolCallLimits())
+}
+
+// DecodeResponseJSONWithLimits decodes with provider/run tool-call ceilings.
+func DecodeResponseJSONWithLimits(data []byte, requestID, fallbackModel string, stateLimit int64, limits shared.ToolCallLimits) (*models.Response, error) {
+	if err := shared.ValidateUnaryJSON(data); err != nil {
+		return nil, protocolError("response is not strict JSON", err)
+	}
 	var wire responseWire
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return nil, protocolError("response is not valid Gemini GenerateContent JSON", err)
 	}
-	return decodeResponse(wire, requestID, fallbackModel, stateLimit)
+	return decodeResponse(wire, requestID, fallbackModel, stateLimit, shared.NewToolCallGuard(limits))
 }
 
 // ValidateModelID enforces Gemini bare model ID rules and returns a path-escaped ID.

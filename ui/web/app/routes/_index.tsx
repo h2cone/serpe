@@ -1,7 +1,7 @@
 import { redirect, useLoaderData, useRevalidator } from "react-router";
 import { api } from "~/lib/api";
 
-export async function loader() {
+export async function clientLoader() {
   try {
     const sessions = await api.listSessions();
     if (sessions.length > 0) {
@@ -14,7 +14,7 @@ export async function loader() {
 }
 
 export default function Index() {
-  useLoaderData<typeof loader>();
+  useLoaderData<typeof clientLoader>();
   const revalidator = useRevalidator();
   return (
     <div className="empty-state">

@@ -20,19 +20,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="theme-color" content="#f4f6f3" />
         <Meta />
         <Links />
-        {/* Critical shell CSS for FCP before full stylesheet applies */}
-        <style
-          dangerouslySetInnerHTML={{
-            __html: `
-              html,body{height:100%;margin:0;background:#f4f6f3;color:#15201c;
-              color-scheme:light;font-family:ui-sans-serif,system-ui,sans-serif}
-              .shell{display:flex;height:100%}
-              .sidebar{width:17rem;border-right:1px solid #dbe1dc;background:#edf0ed;
-              padding:1.125rem .875rem 1rem;overflow:auto}
-              .main{flex:1;display:flex;flex-direction:column;min-width:0}
-            `,
-          }}
-        />
       </head>
       <body>
         {children}
@@ -45,6 +32,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return <Outlet />;
+}
+
+export function HydrateFallback() {
+  return (
+    <main className="token-gate">
+      <section className="token-panel" aria-labelledby="loading-heading">
+        <div className="empty-mark" aria-hidden="true" />
+        <h1 id="loading-heading">Opening Serpe</h1>
+        <p>Loading the local interface…</p>
+      </section>
+    </main>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

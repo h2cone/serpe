@@ -87,6 +87,15 @@ function integerField(value: JSONObject, key: string, path = key): number {
   return field;
 }
 
+function optionalInteger(
+  value: JSONObject,
+  key: string,
+  path = key,
+): number | undefined {
+  if (value[key] === undefined) return undefined;
+  return integerField(value, key, path);
+}
+
 function optionalRecord(value: JSONObject, key: string, path = key): JSONObject | undefined {
   const field = value[key];
   if (field === undefined) return undefined;
@@ -193,7 +202,17 @@ function sessionSummary(value: unknown, path: string) {
 }
 
 export type SessionSummary = ReturnType<typeof sessionSummary>;
-export type SessionDetail = SessionSummary & { messages: Message[] };
+export type SessionDetail = SessionSummary & {
+  messages: Message[];
+  message_start: number;
+  snapshot_length: number;
+  next_before?: string;
+};
+export type SessionMutation = SessionSummary & {
+  messages?: Message[];
+  messages_omitted?: boolean;
+  detail_url?: string;
+};
 
 export function decodeSessionSummary(value: unknown): SessionSummary {
   return sessionSummary(value, "session");
@@ -208,11 +227,59 @@ export function decodeSessionDetail(value: unknown): SessionDetail {
   const input = object(value, "session");
   const summary = sessionSummary(input, "session");
   if (!Array.isArray(input.messages)) return fail("session.messages", "an array");
+  const messages = input.messages.map((item, index) =>
+    message(item, `session.messages[${index}]`),
+  );
+  // These fields were added with detail pagination. Defaults preserve the old
+  // unpaged fixture without weakening the new response's consistency checks.
+  const messageStart =
+    optionalInteger(input, "message_start", "session.message_start") ?? 0;
+  const snapshotLength =
+    optionalInteger(input, "snapshot_length", "session.snapshot_length") ??
+    summary.message_count;
+  const nextBefore = optionalString(
+    input,
+    "next_before",
+    "session.next_before",
+  );
+  if (
+    messageStart + messages.length > snapshotLength ||
+    snapshotLength > summary.message_count
+  ) {
+    return fail("session", "a consistent message page");
+  }
+  if (nextBefore !== undefined && nextBefore.length === 0) {
+    return fail("session.next_before", "a non-empty cursor when present");
+  }
   return {
     ...summary,
-    messages: input.messages.map((item, index) =>
-      message(item, `session.messages[${index}]`),
-    ),
+    messages,
+    message_start: messageStart,
+    snapshot_length: snapshotLength,
+    ...(nextBefore === undefined ? {} : { next_before: nextBefore }),
+  };
+}
+
+export function decodeSessionMutation(value: unknown): SessionMutation {
+  const input = object(value, "session");
+  const summary = sessionSummary(input, "session");
+  if (input.messages !== undefined) {
+    const detail = decodeSessionDetail(value);
+    return { ...detail, messages: detail.messages };
+  }
+  const omitted = optionalBoolean(
+    input,
+    "messages_omitted",
+    "session.messages_omitted",
+  );
+  const detailURL = optionalString(input, "detail_url", "session.detail_url");
+  if (omitted !== true || !detailURL || !detailURL.startsWith("/api/sessions/")) {
+    return fail("session", "messages or a bounded detail acknowledgment");
+  }
+  return {
+    ...summary,
+    messages_omitted: true,
+    detail_url: detailURL,
   };
 }
 

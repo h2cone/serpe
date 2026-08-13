@@ -27,7 +27,7 @@ type protocolAdapter interface {
 	complete(context.Context, []byte, []option.RequestOption) ([]byte, error)
 	startStream(context.Context, []byte, []option.RequestOption) (func() error, error)
 	decode([]byte, string, shared.Config) (*models.Response, error)
-	newSource(*sse.Reader, string, string, shared.Config) models.EventSource
+	newSource(*sse.Reader, string, string, shared.Config, models.StreamLimits) models.EventSource
 }
 
 // NewChatCompletions constructs an official Chat Completions provider without
@@ -78,6 +78,36 @@ func (m *upstreamModel) Capabilities() models.CapabilitySet {
 	return m.provider.adapter.capabilities()
 }
 
+func (m *upstreamModel) ToolResultPolicy() (models.ToolResultPolicy, bool) {
+	return shared.ToolResultPolicy("openai", m.modelID, m.Capabilities())
+}
+
+func (m *upstreamModel) AllowsToolHistoryGroupDeletion() bool { return true }
+
+func (m *upstreamModel) ValidateToolDefinitions(defs []models.Tool) error {
+	for i := range defs {
+		if err := defs[i].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *upstreamModel) MaxEncodedRequestBytes() int64 {
+	return m.provider.config.Limits.MaxRequestBytes
+}
+
+func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *models.Request, stream bool) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	payload, err := m.encode(req, stream)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(payload)), nil
+}
+
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "openai", "generate"); err != nil {
 		return nil, err
@@ -85,6 +115,9 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	payload, err := m.encode(req, false)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > m.MaxEncodedRequestBytes() {
+		return nil, requestTooLarge("generate")
 	}
 	ctx, capture := sdkhttp.PrepareCall(ctx, "generate", nil)
 
@@ -100,16 +133,27 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	if callErr != nil {
 		return nil, normalizeError(callErr, "generate", capture, m.provider.config.Redact)
 	}
-	return m.provider.adapter.decode(raw, capture.RequestID(), m.provider.config)
+	decoded, err := m.provider.adapter.decode(raw, capture.RequestID(), m.provider.config)
+	if err != nil {
+		return nil, err
+	}
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+	return m.StreamWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) StreamWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (models.Stream, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "openai", "stream"); err != nil {
 		return nil, err
 	}
 	payload, err := m.encode(req, true)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > m.MaxEncodedRequestBytes() {
+		return nil, requestTooLarge("stream")
 	}
 	streamCtx, capture, cancel := sdkhttp.PrepareStreamCall(ctx, "stream", nil)
 
@@ -144,8 +188,14 @@ func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models
 		}
 		return nil
 	})
-	source := m.provider.adapter.newSource(reader, capture.RequestID(), m.modelID, m.provider.config)
-	return models.NewStream(ctx, source, models.WithStreamProvider("openai")), nil
+	source := m.provider.adapter.newSource(reader, capture.RequestID(), m.modelID, m.provider.config, limits)
+	return models.NewStream(ctx, source,
+		models.WithStreamProvider("openai"),
+		models.WithStreamLimits(limits)), nil
+}
+
+func requestTooLarge(operation string) error {
+	return &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: operation, Code: "request_too_large", Message: "encoded request exceeds provider limit"}
 }
 
 func (m *upstreamModel) encode(req *models.Request, stream bool) ([]byte, error) {

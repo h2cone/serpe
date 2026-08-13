@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { decodeSessionDetail, decodeSSEFrame, WireProtocolError } from "./wire";
+import {
+  decodeSessionDetail,
+  decodeSessionMutation,
+  decodeSSEFrame,
+  WireProtocolError,
+} from "./wire";
 
 describe("Go SSE wire contract", () => {
   it("decodes every concrete frame serialized by the server", () => {
@@ -51,6 +56,40 @@ describe("REST wire contract", () => {
         updated_at: "now",
         message_count: 1,
         messages: [{ role: "user", content: [{ type: "text" }] }],
+      }),
+    ).toThrow(WireProtocolError);
+  });
+
+  it("checks paged detail metadata and bounded mutation acknowledgments", () => {
+    const base = {
+      id: "s1",
+      cwd: "/work",
+      created_at: "now",
+      updated_at: "now",
+      message_count: 5,
+    };
+    expect(
+      decodeSessionDetail({
+        ...base,
+        messages: [{ role: "user", content: [{ type: "text", text: "x" }] }],
+        message_start: 3,
+        snapshot_length: 4,
+        next_before: "cursor",
+      }),
+    ).toMatchObject({ message_start: 3, snapshot_length: 4 });
+    expect(
+      decodeSessionMutation({
+        ...base,
+        messages_omitted: true,
+        detail_url: "/api/sessions/s1",
+      }),
+    ).toMatchObject({ messages_omitted: true });
+    expect(() =>
+      decodeSessionDetail({
+        ...base,
+        messages: [{ role: "user", content: [{ type: "text", text: "x" }] }],
+        message_start: 4,
+        snapshot_length: 4,
       }),
     ).toThrow(WireProtocolError);
   });

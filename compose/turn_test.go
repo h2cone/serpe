@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/compose"
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/tools"
+	"github.com/h2cone/serpe/runtime/loops"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
@@ -160,13 +161,13 @@ func withState(resp *models.Response, state *models.ProviderState) *models.Respo
 	return resp
 }
 
-func mustService(t *testing.T, model models.Model, store sessions.Store, limits runtime.Limits) *compose.TurnService {
+func mustService(t *testing.T, model models.Model, store sessions.Store, limits loops.Limits) *compose.TurnService {
 	t.Helper()
-	runner, err := runtime.NewRunner(runtime.Config{Model: model, Limits: limits})
+	runner, err := loops.New(loops.Config{Model: model, Limits: limits})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	mgr, err := sessions.NewManager(store)
+	mgr, err := sessions.NewManager(store, sessions.Limits{})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -179,11 +180,11 @@ func mustService(t *testing.T, model models.Model, store sessions.Store, limits 
 
 func mustCreate(t *testing.T, store sessions.Store, id string) {
 	t.Helper()
-	mgr, err := sessions.NewManager(store)
+	mgr, err := sessions.NewManager(store, sessions.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.Create(context.Background(), sessions.New(id, "/work")); err != nil {
+	if _, err := mgr.Create(context.Background(), sessions.New(id, t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -192,7 +193,7 @@ func TestNewRequiresDeps(t *testing.T) {
 	if _, err := compose.New(compose.Config{}); err == nil {
 		t.Fatal("New empty config succeeded")
 	}
-	runner, _ := runtime.NewRunner(runtime.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("x")}}})
+	runner, _ := loops.New(loops.Config{Model: &scriptedModel{responses: []*models.Response{textResponse("x")}}})
 	if _, err := compose.New(compose.Config{Runner: runner}); err == nil {
 		t.Fatal("New without manager succeeded")
 	}
@@ -203,7 +204,7 @@ func TestSendCompletedCommitsSuffix(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{textResponse("hello")}}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	result, committed, err := svc.Send(ctx, "s1", "hi")
 	if err != nil {
@@ -253,20 +254,20 @@ func TestSendMaxTurnsDoesNotCommit(t *testing.T) {
 		},
 		textResponse("done"),
 	}}
-	ping := stubTool{name: "ping", fn: func(context.Context, json.RawMessage) (runtime.ToolOutput, error) {
-		return runtime.TextResult("pong"), nil
+	ping := stubTool{name: "ping", fn: func(context.Context, json.RawMessage) (tools.Output, error) {
+		return tools.Text("pong"), nil
 	}}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	runner, err := runtime.NewRunner(runtime.Config{
+	runner, err := loops.New(loops.Config{
 		Model:  model,
-		Tools:  []runtime.Tool{ping},
-		Limits: runtime.Limits{MaxModelTurns: 1},
+		Tools:  mustTools(t, ping),
+		Limits: loops.Limits{MaxModelTurns: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mgr, _ := sessions.NewManager(store)
+	mgr, _ := sessions.NewManager(store, sessions.Limits{})
 	svc, _ := compose.New(compose.Config{Runner: runner, Manager: mgr})
 
 	result, committed, err := svc.Send(ctx, "s1", "go")
@@ -288,15 +289,24 @@ func TestSendMaxTurnsDoesNotCommit(t *testing.T) {
 
 type stubTool struct {
 	name string
-	fn   func(context.Context, json.RawMessage) (runtime.ToolOutput, error)
+	fn   func(context.Context, json.RawMessage) (tools.Output, error)
 }
 
 func (t stubTool) Definition() models.Tool {
 	return models.NewTool(t.name, t.name, json.RawMessage(`{"type":"object","properties":{}}`))
 }
 
-func (t stubTool) Execute(ctx context.Context, args json.RawMessage) (runtime.ToolOutput, error) {
-	return t.fn(ctx, args)
+func (t stubTool) Execute(ctx context.Context, in tools.Invocation) (tools.Output, error) {
+	return t.fn(ctx, in.Arguments)
+}
+
+func mustTools(t *testing.T, ts ...tools.Tool) *tools.Executor {
+	t.Helper()
+	e, err := tools.New(tools.Config{}, ts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 
 func TestSendFatalDoesNotCommit(t *testing.T) {
@@ -306,7 +316,7 @@ func TestSendFatalDoesNotCommit(t *testing.T) {
 	}}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	result, committed, err := svc.Send(ctx, "s1", "hi")
 	if err == nil {
@@ -317,7 +327,7 @@ func TestSendFatalDoesNotCommit(t *testing.T) {
 	}
 	// Stream fails at model.Stream open → may be (nil, err) from Run.
 	_ = result
-	mgr, _ := sessions.NewManager(store)
+	mgr, _ := sessions.NewManager(store, sessions.Limits{})
 	got, _ := mgr.Get(ctx, "s1")
 	if len(got.Messages) != 0 {
 		t.Fatalf("messages = %d", len(got.Messages))
@@ -333,10 +343,10 @@ func TestSendCancelDoesNotCommit(t *testing.T) {
 	}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	errCh := make(chan error, 1)
-	var result *runtime.Result
+	var result *loops.Result
 	var committed *sessions.Session
 	go func() {
 		var err error
@@ -369,7 +379,7 @@ func TestSendCancelDoesNotCommit(t *testing.T) {
 		t.Fatal("cancel must not commit")
 	}
 	_ = result
-	mgr, _ := sessions.NewManager(store)
+	mgr, _ := sessions.NewManager(store, sessions.Limits{})
 	got, _ := mgr.Get(context.Background(), "s1")
 	if len(got.Messages) != 0 {
 		t.Fatalf("messages = %d", len(got.Messages))
@@ -381,7 +391,7 @@ func TestSendValidationFailureNilResult(t *testing.T) {
 	ctx := context.Background()
 	model := &scriptedModel{responses: []*models.Response{textResponse("x")}}
 	store := sessions.NewMemoryStore()
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 	result, committed, err := svc.Send(ctx, "missing", "hi")
 	if err == nil || result != nil || committed != nil {
 		t.Fatalf("want (nil,nil,err), got (%v,%v,%v)", result, committed, err)
@@ -398,7 +408,7 @@ func TestMultiTurnProviderState(t *testing.T) {
 	}}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	if _, _, err := svc.Send(ctx, "s1", "first"); err != nil {
 		t.Fatal(err)
@@ -429,7 +439,7 @@ func TestMultiTurnProviderState(t *testing.T) {
 
 func TestMultiTurnProviderStateAcrossFileStoreRestart(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := privateComposeTempDir(t)
 	state1 := &models.ProviderState{Provider: "openai", Data: json.RawMessage(`{"cursor":"abc"}`)}
 
 	store1, err := sessions.NewFileStore(root)
@@ -441,8 +451,11 @@ func TestMultiTurnProviderStateAcrossFileStoreRestart(t *testing.T) {
 		textResponse("two"),
 	}}
 	mustCreate(t, store1, "sess-1")
-	svc1 := mustService(t, model, store1, runtime.Limits{})
+	svc1 := mustService(t, model, store1, loops.Limits{})
 	if _, _, err := svc1.Send(ctx, "sess-1", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store1.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -451,7 +464,8 @@ func TestMultiTurnProviderStateAcrossFileStoreRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc2 := mustService(t, model, store2, runtime.Limits{})
+	t.Cleanup(func() { _ = store2.Close() })
+	svc2 := mustService(t, model, store2, loops.Limits{})
 	if _, committed, err := svc2.Send(ctx, "sess-1", "second"); err != nil {
 		t.Fatal(err)
 	} else if committed == nil || len(committed.Messages) != 4 {
@@ -474,13 +488,13 @@ func TestStreamCommitsOnExhaust(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{textResponse("streamed")}}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	turn, err := svc.Stream(ctx, "s1", "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var kinds []runtime.EventKind
+	var kinds []loops.EventKind
 	for turn.Next() {
 		kinds = append(kinds, turn.Event().Kind)
 	}
@@ -497,7 +511,7 @@ func TestStreamCommitsOnExhaust(t *testing.T) {
 	if turn.Next() {
 		t.Fatal("Next after exhaust returned true")
 	}
-	mgr, _ := sessions.NewManager(store)
+	mgr, _ := sessions.NewManager(store, sessions.Limits{})
 	got, _ := mgr.Get(ctx, "s1")
 	if len(got.Messages) != 2 {
 		t.Fatalf("double commit? len=%d", len(got.Messages))
@@ -509,7 +523,7 @@ func TestStreamCommitsBeforeRunEndIsPublished(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{textResponse("streamed")}}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	turn, err := svc.Stream(ctx, "s1", "hi")
 	if err != nil {
@@ -517,7 +531,7 @@ func TestStreamCommitsBeforeRunEndIsPublished(t *testing.T) {
 	}
 
 	for turn.Next() {
-		if turn.Event().Kind != runtime.EventRunEnd {
+		if turn.Event().Kind != loops.EventRunEnd {
 			continue
 		}
 		if err := turn.Err(); err != nil {
@@ -529,7 +543,7 @@ func TestStreamCommitsBeforeRunEndIsPublished(t *testing.T) {
 		if err := turn.Close(); err != nil {
 			t.Fatal(err)
 		}
-		mgr, _ := sessions.NewManager(store)
+		mgr, _ := sessions.NewManager(store, sessions.Limits{})
 		committed, err := mgr.Get(ctx, "s1")
 		if err != nil || len(committed.Messages) != 2 {
 			t.Fatalf("breaking at run_end then closing lost commit: %+v, %v", committed, err)
@@ -554,7 +568,7 @@ func TestStreamCommitFailureSurfacesInErr(t *testing.T) {
 	base := sessions.NewMemoryStore()
 	mustCreate(t, base, "s1")
 	store := &failSaveStore{MemoryStore: base}
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	turn, err := svc.Stream(ctx, "s1", "hi")
 	if err != nil {
@@ -572,7 +586,7 @@ func TestStreamCommitFailureSurfacesInErr(t *testing.T) {
 		t.Fatal("Result should still be available after commit failure")
 	}
 	// Store unchanged: Load via a working manager over the base memory.
-	mgr, _ := sessions.NewManager(base)
+	mgr, _ := sessions.NewManager(base, sessions.Limits{})
 	got, _ := mgr.Get(ctx, "s1")
 	if len(got.Messages) != 0 {
 		t.Fatalf("messages = %d after failed commit", len(got.Messages))
@@ -588,7 +602,7 @@ func TestStreamCloseCancelDoesNotCommit(t *testing.T) {
 	}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	turn, err := svc.Stream(ctx, "s1", "hi")
 	if err != nil {
@@ -608,7 +622,7 @@ func TestStreamCloseCancelDoesNotCommit(t *testing.T) {
 	if turn.CommitErr() != nil {
 		t.Fatalf("unexpected commit err: %v", turn.CommitErr())
 	}
-	mgr, _ := sessions.NewManager(store)
+	mgr, _ := sessions.NewManager(store, sessions.Limits{})
 	got, _ := mgr.Get(context.Background(), "s1")
 	if len(got.Messages) != 0 {
 		t.Fatalf("messages = %d", len(got.Messages))
@@ -627,7 +641,7 @@ func TestConcurrentTurnConflict(t *testing.T) {
 	}
 	store := sessions.NewMemoryStore()
 	mustCreate(t, store, "s1")
-	svc := mustService(t, model, store, runtime.Limits{})
+	svc := mustService(t, model, store, loops.Limits{})
 
 	type outcome struct {
 		err       error
@@ -679,7 +693,7 @@ func TestConcurrentTurnConflict(t *testing.T) {
 	if okN != 1 || conflictN != 1 {
 		t.Fatalf("want 1 success + 1 conflict, got ok=%d conflict=%d outcomes=%v", okN, conflictN, outcomes)
 	}
-	mgr, _ := sessions.NewManager(store)
+	mgr, _ := sessions.NewManager(store, sessions.Limits{})
 	got, _ := mgr.Get(ctx, "s1")
 	// Winner appends 2 messages (user+assistant); loser does not fork.
 	if len(got.Messages) != 2 {

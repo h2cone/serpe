@@ -1,17 +1,25 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/h2cone/serpe/core/models"
 )
+
+type alwaysFailReader struct{ err error }
+
+func (r alwaysFailReader) Read([]byte) (int, error) { return 0, r.err }
 
 func TestNewFileStoreRequiresDir(t *testing.T) {
 	if _, err := NewFileStore(filepath.Join(t.TempDir(), "missing")); err == nil {
@@ -26,15 +34,188 @@ func TestNewFileStoreRequiresDir(t *testing.T) {
 	}
 }
 
-func TestFileStoreRoundTrip(t *testing.T) {
-	ctx := context.Background()
-	store, err := NewFileStore(t.TempDir())
+func TestFileStoreLockConflictRestartAndFailedConstructionRelease(t *testing.T) {
+	root := privateTempDir(t)
+	first, err := NewFileStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if second, err := NewFileStore(root); err == nil {
+		_ = second.Close()
+		t.Fatal("second FileStore acquired an already-held maintenance lock")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewFileStore(root)
+	if err != nil {
+		t.Fatalf("restart with persistent lock file: %v", err)
+	}
+	if err := restarted.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, storeFormatName), []byte("unknown\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := NewFileStore(root); err == nil {
+		_ = failed.Close()
+		t.Fatal("unknown marker was accepted")
+	}
+	if err := os.WriteFile(filepath.Join(root, storeFormatName), []byte(storeFormatV2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterFailure, err := NewFileStore(root)
+	if err != nil {
+		t.Fatalf("failed constructor retained maintenance lock: %v", err)
+	}
+	_ = afterFailure.Close()
+}
+
+func TestFileStorePinsRootNamespaceAndRejectsReplacement(t *testing.T) {
+	parent := privateTempDir(t)
+	root := filepath.Join(parent, "store")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restrictTestStoreDir(t, root)
+	store, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Create(context.Background(), "pinned", []byte("original")); err != nil {
+		t.Fatal(err)
+	}
+
+	moved := filepath.Join(parent, "moved-store")
+	if err := os.Rename(root, moved); err != nil {
+		if runtime.GOOS != "windows" {
+			t.Fatalf("rename an open store root: %v", err)
+		}
+		got, loadErr := store.Load(context.Background(), "pinned")
+		if loadErr != nil || string(got) != "original" {
+			t.Fatalf("store after rejected root rename = %q, %v", got, loadErr)
+		}
+		t.Logf("Windows denied replacement of the open store root: %v", err)
+		return
+	}
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restrictTestStoreDir(t, root)
+	if err := os.WriteFile(filepath.Join(root, storeFormatName), []byte(storeFormatV2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recordName := encodeRecordName("pinned")
+	if err := os.WriteFile(filepath.Join(root, recordName), []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Load(context.Background(), "pinned"); !errors.Is(err, ErrStoreCorrupt) {
+		t.Fatalf("Load after root replacement = %v, want ErrStoreCorrupt", err)
+	}
+	got, err := store.rootHandle.ReadFile(recordName)
+	if err != nil {
+		t.Fatalf("read through pinned root handle: %v", err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("pinned root handle read %q, want original", got)
+	}
+}
+
+func TestFileStoreRejectsMarkerAndRecordSymlinks(t *testing.T) {
+	t.Run("marker", func(t *testing.T) {
+		root := privateTempDir(t)
+		target := filepath.Join(root, "marker-target")
+		if err := os.WriteFile(target, []byte(storeFormatV2), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, storeFormatName)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if store, err := NewFileStore(root); err == nil {
+			_ = store.Close()
+			t.Fatal("symlink format marker was accepted")
+		}
+	})
+
+	t.Run("record", func(t *testing.T) {
+		root := privateTempDir(t)
+		store, err := NewFileStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if err := store.Create(context.Background(), "linked", []byte("safe")); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(root, "outside-record")
+		if err := os.WriteFile(target, []byte("unsafe"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(store.path("linked")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, store.path("linked")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if _, err := store.Load(context.Background(), "linked"); !errors.Is(err, ErrStoreCorrupt) {
+			t.Fatalf("Load symlink = %v, want ErrStoreCorrupt", err)
+		}
+	})
+}
+
+func TestFileStoreRejectsCaseVariantJSONCandidate(t *testing.T) {
+	root := privateTempDir(t)
+	if err := os.WriteFile(filepath.Join(root, "hidden.JSON"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if store, err := NewFileStore(root); !errors.Is(err, ErrMigrationRequired) {
+		if store != nil {
+			_ = store.Close()
+		}
+		t.Fatalf("NewFileStore hidden.JSON = %v, want ErrMigrationRequired", err)
+	}
+}
+
+func TestFileStoreRejectsUnsafeOwnerAccessPolicy(t *testing.T) {
+	t.Run("root", func(t *testing.T) {
+		root := privateTempDir(t)
+		makeTestStorePathUnsafe(t, root, true)
+		if store, err := NewFileStore(root); err == nil {
+			_ = store.Close()
+			t.Fatal("FileStore accepted an access-broad root")
+		}
+	})
+
+	t.Run("record", func(t *testing.T) {
+		root := privateTempDir(t)
+		store, err := NewFileStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if err := store.Create(context.Background(), "broad", []byte("secret")); err != nil {
+			t.Fatal(err)
+		}
+		makeTestStorePathUnsafe(t, store.path("broad"), false)
+		if _, err := store.Load(context.Background(), "broad"); !errors.Is(err, ErrStoreCorrupt) {
+			t.Fatalf("Load broad-access record = %v, want ErrStoreCorrupt", err)
+		}
+	})
+}
+
+func TestFileStoreRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewFileStore(privateTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	s := &Session{
-		ID: "sess-1", CWD: "/work", CreatedAt: now, UpdatedAt: now,
+		ID: "sess-1", CWD: testCWD("work"), CreatedAt: now, UpdatedAt: now,
 		Metadata: map[string]string{"title": "t"},
 		Messages: []models.Message{
 			models.NewUserMessage(models.Text("hi")),
@@ -63,10 +244,11 @@ func TestFileStoreRoundTrip(t *testing.T) {
 
 func TestFileStorePathSafety(t *testing.T) {
 	ctx := context.Background()
-	store, err := NewFileStore(t.TempDir())
+	store, err := NewFileStore(privateTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	// Portable ID policy rejects these before any filesystem write.
 	bad := []string{
 		"../escape",
@@ -105,11 +287,12 @@ func TestFileStorePathSafety(t *testing.T) {
 
 func TestFileStoreOrphanTmpIgnoredByLoad(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := privateTempDir(t)
 	store, err := NewFileStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Create(ctx, "s1", []byte("committed")); err != nil {
 		t.Fatal(err)
 	}
@@ -132,26 +315,112 @@ func TestFileStoreOrphanTmpIgnoredByLoad(t *testing.T) {
 }
 
 func TestFileStoreStartupCleansTmp(t *testing.T) {
-	root := t.TempDir()
-	orphan := filepath.Join(root, "s1.abc.tmp")
+	root := privateTempDir(t)
+	orphan := filepath.Join(root, encodeRecordName("s1")+"."+strings.Repeat("a", 32)+recordTempSuffix)
 	if err := os.WriteFile(orphan, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewFileStore(root); err != nil {
+	store, err := NewFileStore(root)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatal("startup did not clean *.tmp")
 	}
 }
 
+func TestFileStoreTempNameContract(t *testing.T) {
+	id := strings.Repeat("a", 128)
+	name := encodeRecordName(id) + "." + strings.Repeat("b", 32) + recordTempSuffix
+	if len(name) != 250 || !isOwnedTempName(name) {
+		t.Fatalf("canonical maximum temp name len=%d accepted=%t", len(name), isOwnedTempName(name))
+	}
+	for _, invalid := range []string{
+		name + "x",
+		encodeRecordName(id) + "." + strings.Repeat("B", 32) + recordTempSuffix,
+		".serpe-record-" + strings.Repeat("b", 32) + recordTempSuffix,
+		"r2_invalid.json." + strings.Repeat("b", 32) + recordTempSuffix,
+	} {
+		if isOwnedTempName(invalid) {
+			t.Fatalf("accepted non-owned temp %q", invalid)
+		}
+	}
+}
+
+func TestFileStoreTempEntropyAndCollisionCeiling(t *testing.T) {
+	t.Run("entropy failure", func(t *testing.T) {
+		root := privateTempDir(t)
+		store, err := NewFileStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		previous := fileStoreRandom
+		fileStoreRandom = alwaysFailReader{err: errors.New("entropy unavailable")}
+		defer func() { fileStoreRandom = previous }()
+		if err := store.Create(context.Background(), "entropy", []byte("data")); err == nil {
+			t.Fatal("Create succeeded without entropy")
+		}
+		if _, err := os.Lstat(store.path("entropy")); !os.IsNotExist(err) {
+			t.Fatalf("target appeared after entropy failure: %v", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name       string
+		collisions int
+		wantOK     bool
+	}{{"three collisions", 3, true}, {"four collisions", 4, false}} {
+		t.Run(test.name, func(t *testing.T) {
+			root := privateTempDir(t)
+			store, err := NewFileStore(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			id := "collision"
+			var random bytes.Buffer
+			for attempt := 0; attempt < 4; attempt++ {
+				block := bytes.Repeat([]byte{byte(attempt + 1)}, 16)
+				random.Write(block)
+				if attempt < test.collisions {
+					name := encodeRecordName(id) + "." + fmt.Sprintf("%x", block) + recordTempSuffix
+					if err := os.WriteFile(filepath.Join(root, name), []byte("occupied"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			previous := fileStoreRandom
+			fileStoreRandom = &random
+			defer func() { fileStoreRandom = previous }()
+			err = store.Create(context.Background(), id, []byte("complete"))
+			if test.wantOK && err != nil {
+				t.Fatalf("Create after three collisions: %v", err)
+			}
+			if !test.wantOK && err == nil {
+				t.Fatal("Create succeeded after four collisions")
+			}
+			if test.wantOK {
+				data, loadErr := store.Load(context.Background(), id)
+				if loadErr != nil || string(data) != "complete" {
+					t.Fatalf("Load = %q, %v", data, loadErr)
+				}
+			} else if _, statErr := os.Lstat(store.path(id)); !os.IsNotExist(statErr) {
+				t.Fatalf("target appeared after exhausted collisions: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestFileStoreSaveCleansOtherTmp(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := privateTempDir(t)
 	store, err := NewFileStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Create(ctx, "s1", []byte("one")); err != nil {
 		t.Fatal(err)
 	}
@@ -162,19 +431,20 @@ func TestFileStoreSaveCleansOtherTmp(t *testing.T) {
 	if err := store.Save(ctx, "s1", []byte("two")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatal("successful Save did not clean same-id orphan tmp")
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatal("Save removed an unowned temporary name")
 	}
 }
 
 func TestFileStoreLoadDoesNotDeleteActiveTmp(t *testing.T) {
 	// Concurrent Load must not remove a temp that Create/Save still owns.
 	ctx := context.Background()
-	root := t.TempDir()
+	root := privateTempDir(t)
 	store, err := NewFileStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Create(ctx, "s1", []byte("one")); err != nil {
 		t.Fatal(err)
 	}
@@ -192,27 +462,28 @@ func TestFileStoreLoadDoesNotDeleteActiveTmp(t *testing.T) {
 
 func TestFileStoreCorruptJSON(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := privateTempDir(t)
 	store, err := NewFileStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := os.WriteFile(filepath.Join(root, "s1.json"), []byte(`{not json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mgr := mustManager(t, store)
-	_, err = mgr.Get(ctx, "s1")
-	if !errors.Is(err, ErrInvalidSession) {
-		t.Fatalf("corrupt Load = %v, want ErrInvalidSession", err)
+	_, _, err = store.ListIDsPage(ctx, "", 100)
+	if !errors.Is(err, ErrStoreCorrupt) {
+		t.Fatalf("corrupt filename scan = %v, want ErrStoreCorrupt", err)
 	}
 }
 
 func TestFileStoreConcurrentCreateSameID(t *testing.T) {
 	ctx := context.Background()
-	store, err := NewFileStore(t.TempDir())
+	store, err := NewFileStore(privateTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	const n = 32
 	var wg sync.WaitGroup
 	errCh := make(chan error, n)
@@ -251,10 +522,11 @@ func TestFileStoreConcurrentCreateSameID(t *testing.T) {
 
 func TestFileStoreConcurrentLoadDuringSave(t *testing.T) {
 	ctx := context.Background()
-	store, err := NewFileStore(t.TempDir())
+	store, err := NewFileStore(privateTempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Create(ctx, "s1", []byte("0")); err != nil {
 		t.Fatal(err)
 	}
@@ -295,20 +567,23 @@ func TestFileStoreConcurrentLoadDuringSave(t *testing.T) {
 
 func TestFileStoreManagerIntegrationRestart(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := privateTempDir(t)
 
 	store1, err := NewFileStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mgr1 := mustManager(t, store1)
-	if _, err := mgr1.Create(ctx, New("sess-1", "/work")); err != nil {
+	if _, err := mgr1.Create(ctx, New("sess-1", testCWD("work"))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mgr1.Append(ctx, "sess-1",
 		models.NewUserMessage(models.Text("q")),
 		models.NewAssistantMessage(models.Text("a")),
 	); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr1.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -318,6 +593,7 @@ func TestFileStoreManagerIntegrationRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	mgr2 := mustManager(t, store2)
+	t.Cleanup(func() { _ = mgr2.Close() })
 	got, err := mgr2.Get(ctx, "sess-1")
 	if err != nil {
 		t.Fatal(err)

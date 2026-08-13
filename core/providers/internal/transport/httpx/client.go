@@ -17,14 +17,16 @@ import (
 
 // Config configures an immutable HTTP client helper.
 type Config struct {
-	BaseURL               *url.URL
-	Doer                  shared.Doer
-	Authenticate          shared.AuthenticateFunc
-	Headers               http.Header
-	Provider              string
-	MaxErrorResponseBytes int64
-	RequireContentType    bool
-	Redact                []string
+	BaseURL                *url.URL
+	Doer                   shared.Doer
+	Authenticate           shared.AuthenticateFunc
+	Headers                http.Header
+	Provider               string
+	MaxErrorResponseBytes  int64
+	MaxResponseBytes       int64
+	MaxStreamResponseBytes int64
+	RequireContentType     bool
+	Redact                 []string
 }
 
 // Client safely joins fixed endpoints and performs normalized status handling.
@@ -35,6 +37,9 @@ type Client struct {
 
 // New creates an immutable HTTP helper.
 func New(config Config) *Client {
+	if config.MaxStreamResponseBytes == 0 {
+		config.MaxStreamResponseBytes = config.MaxResponseBytes
+	}
 	config.Headers = config.Headers.Clone()
 	config.Redact = append([]string(nil), config.Redact...)
 	client := &Client{config: config}
@@ -103,6 +108,12 @@ func (c *Client) Do(ctx context.Context, operation, endpoint string, query url.V
 	if c.config.RequireContentType && !HasMediaType(response.Header.Get("Content-Type"), expected) {
 		DrainAndClose(response.Body, 4096)
 		return nil, &models.Error{Kind: models.ErrorProtocol, Provider: c.config.Provider, Operation: operation, Code: "unexpected_content_type", HTTPStatus: response.StatusCode, RequestID: RequestID(response.Header), Message: fmt.Sprintf("expected %s response", expected)}
+	}
+	if stream {
+		if encodingErr := PrepareResponseBody(response, c.config.MaxStreamResponseBytes, c.config.Provider, operation); encodingErr != nil {
+			DrainAndClose(response.Body, 0)
+			return nil, encodingErr
+		}
 	}
 	return response, nil
 }

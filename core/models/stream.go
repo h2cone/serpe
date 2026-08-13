@@ -20,12 +20,21 @@ type StreamOption func(*streamOptions)
 
 type streamOptions struct {
 	provider string
+	limits   StreamLimits
+	limitErr error
 }
 
 // WithStreamProvider supplies the provider name used for locally generated
 // protocol and cancellation errors.
 func WithStreamProvider(provider string) StreamOption {
 	return func(options *streamOptions) { options.provider = provider }
+}
+
+// WithStreamLimits tightens the package hard limits for one normalized turn.
+func WithStreamLimits(limits StreamLimits) StreamOption {
+	return func(options *streamOptions) {
+		options.limits, options.limitErr = normalizeStreamLimits(limits)
+	}
 }
 
 // NewStream wraps a canonical EventSource with ordering validation and response
@@ -40,7 +49,15 @@ func NewStream(ctx context.Context, source EventSource, options ...StreamOption)
 			option(&configured)
 		}
 	}
+	if configured.limitErr == nil && configured.limits.MaxEventBytes == 0 {
+		configured.limits, configured.limitErr = normalizeStreamLimits(StreamLimits{})
+	}
 	stream := &eventStream{ctx: ctx, source: source, reducer: newReducer(configured.provider), provider: configured.provider}
+	if configured.limitErr == nil {
+		stream.limiter = newStreamLimiter(configured.limits)
+	} else {
+		stream.err = responseLimitError(configured.provider, "invalid stream limits", configured.limitErr)
+	}
 	if source == nil {
 		stream.err = &Error{Kind: ErrorInvalidRequest, Provider: configured.provider, Operation: "stream", Message: "event source is nil"}
 	}
@@ -52,6 +69,7 @@ type eventStream struct {
 	ctx          context.Context
 	source       EventSource
 	reducer      *reducer
+	limiter      *streamLimiter
 	provider     string
 	current      Event
 	err          error
@@ -98,6 +116,14 @@ func (s *eventStream) Next() bool {
 				s.err = &Error{Kind: ErrorProtocol, Provider: s.provider, Operation: "stream_next", Code: "read_error", Message: "failed to read model stream", Cause: err, Retryable: !s.terminalSeen}
 			}
 		}
+		return false
+	}
+	if s.limiter == nil {
+		s.err = responseLimitError(s.provider, "stream limiter is unavailable", nil)
+		return false
+	}
+	if err := s.limiter.accept(event); err != nil {
+		s.err = responseLimitError(s.provider, "model response exceeded a hard limit", err)
 		return false
 	}
 	if err := s.reducer.apply(event); err != nil {

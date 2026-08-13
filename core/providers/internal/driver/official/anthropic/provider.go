@@ -64,6 +64,39 @@ func (m *upstreamModel) Capabilities() models.CapabilitySet {
 	return defaultanthropic.ProtocolCapabilities()
 }
 
+func (m *upstreamModel) ToolResultPolicy() (models.ToolResultPolicy, bool) {
+	return shared.ToolResultPolicy("anthropic", m.modelID, m.Capabilities())
+}
+
+func (m *upstreamModel) AllowsToolHistoryGroupDeletion() bool { return true }
+
+func (m *upstreamModel) ValidateToolDefinitions(defs []models.Tool) error {
+	for i := range defs {
+		if err := defs[i].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *upstreamModel) MaxEncodedRequestBytes() int64 {
+	if configured := m.provider.config.Limits.MaxRequestBytes; configured < 30<<20 {
+		return configured
+	}
+	return 30 << 20
+}
+
+func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *models.Request, stream bool) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	payload, err := m.encode(req, stream)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(payload)), nil
+}
+
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "generate"); err != nil {
 		return nil, err
@@ -71,6 +104,9 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	payload, err := m.encode(req, false)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > m.MaxEncodedRequestBytes() {
+		return nil, anthropicRequestTooLarge("generate")
 	}
 	ctx, capture := sdkhttp.PrepareCall(ctx, "generate", nil)
 
@@ -84,16 +120,27 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	if callErr != nil {
 		return nil, normalizeError(callErr, "generate", capture, m.provider.config.Redact)
 	}
-	return defaultanthropic.DecodeResponseJSON(raw, capture.RequestID(), m.provider.config.Limits.MaxProviderStateBytes)
+	decoded, err := defaultanthropic.DecodeResponseJSONWithLimits(raw, capture.RequestID(), m.provider.config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(m.provider.config.Limits, models.StreamLimits{}))
+	if err != nil {
+		return nil, err
+	}
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+	return m.StreamWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) StreamWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (models.Stream, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "stream"); err != nil {
 		return nil, err
 	}
 	payload, err := m.encode(req, true)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > m.MaxEncodedRequestBytes() {
+		return nil, anthropicRequestTooLarge("stream")
 	}
 	streamCtx, capture, cancel := sdkhttp.PrepareStreamCall(ctx, "stream", nil)
 
@@ -122,8 +169,15 @@ func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models
 		sse.NewReaderWithClose(body, m.provider.config.Limits.MaxSSEEventBytes, func() error {
 			cancel()
 			return stream.Close()
-		}), requestID, m.modelID, m.provider.config.Policy.IgnoreUnknownEvent, m.provider.config.Limits.MaxProviderStateBytes)
-	return models.NewStream(ctx, source, models.WithStreamProvider("anthropic")), nil
+		}), requestID, m.modelID, m.provider.config.Policy.IgnoreUnknownEvent, m.provider.config.Limits.MaxProviderStateBytes,
+		shared.EffectiveToolCallLimits(m.provider.config.Limits, limits))
+	return models.NewStream(ctx, source,
+		models.WithStreamProvider("anthropic"),
+		models.WithStreamLimits(limits)), nil
+}
+
+func anthropicRequestTooLarge(operation string) error {
+	return &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: operation, Code: "request_too_large", Message: "encoded request exceeds provider limit"}
 }
 
 func (m *upstreamModel) encode(req *models.Request, stream bool) ([]byte, error) {

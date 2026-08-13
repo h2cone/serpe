@@ -21,7 +21,7 @@ func TestStoreContract_Memory(t *testing.T) {
 func TestStoreContract_File(t *testing.T) {
 	runStoreContract(t, func(t *testing.T) Store {
 		t.Helper()
-		s, err := NewFileStore(t.TempDir())
+		s, err := NewFileStore(privateTempDir(t))
 		if err != nil {
 			t.Fatalf("NewFileStore: %v", err)
 		}
@@ -31,12 +31,21 @@ func TestStoreContract_File(t *testing.T) {
 
 func runStoreContract(t *testing.T, newStore storeFactory) {
 	t.Helper()
-	t.Run("lifecycle", func(t *testing.T) { contractLifecycle(t, newStore(t)) })
-	t.Run("ownership", func(t *testing.T) { contractOwnership(t, newStore(t)) })
-	t.Run("context_canceled", func(t *testing.T) { contractContextCanceled(t, newStore(t)) })
-	t.Run("invalid_id_load", func(t *testing.T) { contractInvalidID(t, newStore(t)) })
-	t.Run("concurrent_create", func(t *testing.T) { contractConcurrentCreate(t, newStore(t)) })
-	t.Run("list", func(t *testing.T) { contractList(t, newStore(t)) })
+	withStore := func(t *testing.T) Store {
+		store := newStore(t)
+		t.Cleanup(func() {
+			if err := store.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+		})
+		return store
+	}
+	t.Run("lifecycle", func(t *testing.T) { contractLifecycle(t, withStore(t)) })
+	t.Run("ownership", func(t *testing.T) { contractOwnership(t, withStore(t)) })
+	t.Run("context_canceled", func(t *testing.T) { contractContextCanceled(t, withStore(t)) })
+	t.Run("invalid_id_load", func(t *testing.T) { contractInvalidID(t, withStore(t)) })
+	t.Run("concurrent_create", func(t *testing.T) { contractConcurrentCreate(t, withStore(t)) })
+	t.Run("list", func(t *testing.T) { contractList(t, withStore(t)) })
 }
 
 func contractList(t *testing.T, store Store) {

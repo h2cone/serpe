@@ -111,9 +111,22 @@ func ValidateCapabilities(req *Request, set CapabilitySet, provider string) erro
 				if err := require(CapabilityImageInput, "image input"); err != nil {
 					return err
 				}
-			case ContentToolCall, ContentToolResult:
+			case ContentToolCall:
 				if err := require(CapabilityTools, "tools"); err != nil {
 					return err
+				}
+			case ContentToolResult:
+				if err := require(CapabilityTools, "tools"); err != nil {
+					return err
+				}
+				if content.ToolResult != nil {
+					for _, child := range content.ToolResult.Content {
+						if child.Kind == ContentImage {
+							if err := require(CapabilityToolResultImage, "tool-result image"); err != nil {
+								return err
+							}
+						}
+					}
 				}
 			case ContentReasoningSummary:
 				if err := require(CapabilityReasoningSummary, "reasoning summaries"); err != nil {

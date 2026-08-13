@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/h2cone/serpe/core/models"
@@ -31,6 +32,7 @@ type messageSource struct {
 	wireUsage     usageWire
 	stateBlocks   map[int]json.RawMessage
 	hasState      bool
+	toolGuard     *shared.ToolCallGuard
 }
 
 type blockState struct {
@@ -48,8 +50,12 @@ type blockState struct {
 
 // NewSSEStreamSource builds an Anthropic event source from a raw SSE response
 // obtained through an official SDK request.
-func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, ignoreUnknown bool, stateLimit int64) models.EventSource {
-	return &messageSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, ignoreUnknown: ignoreUnknown, stateLimit: stateLimit, blocks: make(map[int]*blockState), stateBlocks: make(map[int]json.RawMessage), finish: models.FinishUnknown}
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, ignoreUnknown bool, stateLimit int64, toolLimits ...shared.ToolCallLimits) models.EventSource {
+	limits := shared.DefaultToolCallLimits()
+	if len(toolLimits) > 0 {
+		limits = toolLimits[0]
+	}
+	return &messageSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, ignoreUnknown: ignoreUnknown, stateLimit: stateLimit, blocks: make(map[int]*blockState), stateBlocks: make(map[int]json.RawMessage), finish: models.FinishUnknown, toolGuard: shared.NewToolCallGuard(limits)}
 }
 
 func (s *messageSource) Next() (models.Event, error) {
@@ -69,6 +75,9 @@ func (s *messageSource) Next() (models.Event, error) {
 		}
 		if len(wireEvent.Data) == 0 {
 			continue
+		}
+		if err := shared.ValidateStreamJSON(wireEvent.Data); err != nil {
+			return models.Event{}, streamProtocol("invalid_json", "Anthropic stream event is not strict JSON", err)
 		}
 		var event streamEventWire
 		if err := json.Unmarshal(wireEvent.Data, &event); err != nil {
@@ -127,6 +136,9 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 			if !ok {
 				return streamProtocol("invalid_tool_call", "Anthropic tool input is not a JSON object", nil)
 			}
+			if err := s.toolGuard.Start(strconv.Itoa(event.Index), block.ID, block.Name); err != nil {
+				return streamProtocol("response_limit", "Anthropic tool-call response exceeds configured limit", err)
+			}
 			state.kind = models.ContentToolCall
 			state.initialArgs = input
 			content = models.ToolCallContent(block.ID, block.Name, nil)
@@ -170,6 +182,9 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 			s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: 0, PartIndex: event.Index, Delta: models.Delta{Kind: models.DeltaText, Text: event.Delta.Text}, ProviderEventID: eventID})
 		case "input_json_delta":
 			if event.Delta.PartialJSON != "" {
+				if err := s.toolGuard.AddArguments(strconv.Itoa(event.Index), len(event.Delta.PartialJSON)); err != nil {
+					return streamProtocol("response_limit", "Anthropic tool-call response exceeds configured limit", err)
+				}
 				state.hadArgs = true
 				state.args.WriteString(event.Delta.PartialJSON)
 				s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: 0, PartIndex: event.Index, Delta: models.Delta{Kind: models.DeltaToolArguments, Text: event.Delta.PartialJSON}, ProviderEventID: eventID})
@@ -195,6 +210,9 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 		}
 		if state.kind == models.ContentToolCall && !state.hadArgs {
 			arguments := string(state.initialArgs)
+			if err := s.toolGuard.AddArguments(strconv.Itoa(event.Index), len(arguments)); err != nil {
+				return streamProtocol("response_limit", "Anthropic tool-call response exceeds configured limit", err)
+			}
 			s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: 0, PartIndex: event.Index, Delta: models.Delta{Kind: models.DeltaToolArguments, Text: arguments}, ProviderEventID: eventID})
 		}
 		switch state.kind {

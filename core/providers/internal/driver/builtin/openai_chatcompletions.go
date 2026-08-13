@@ -18,11 +18,11 @@ func NewOpenAIChatCompletions(config shared.Config) *Provider {
 			}
 			return chatcompletions.EncodeRequest(modelID, req, stream)
 		},
-		Decode: func(raw []byte, requestID, _ string, _ shared.Config) (*models.Response, error) {
-			return chatcompletions.DecodeResponseJSON(raw, requestID)
+		Decode: func(raw []byte, requestID, _ string, config shared.Config) (*models.Response, error) {
+			return chatcompletions.DecodeResponseJSONWithLimits(raw, requestID, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
 		},
-		NewSource: func(reader *sse.Reader, requestID, modelID string, _ shared.Config) models.EventSource {
-			return chatcompletions.NewSSEStreamSource(reader, requestID, modelID)
+		NewSource: func(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
+			return chatcompletions.NewSSEStreamSource(reader, requestID, modelID, shared.EffectiveToolCallLimits(config.Limits, limits))
 		},
 	})
 }

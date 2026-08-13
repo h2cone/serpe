@@ -43,9 +43,9 @@ func (a *responsesAdapter) startStream(ctx context.Context, payload []byte, opti
 }
 
 func (*responsesAdapter) decode(raw []byte, requestID string, config shared.Config) (*models.Response, error) {
-	return defaultresponses.DecodeResponseJSON(raw, requestID, config.Limits.MaxProviderStateBytes)
+	return defaultresponses.DecodeResponseJSONWithLimits(raw, requestID, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
 }
 
-func (*responsesAdapter) newSource(reader *sse.Reader, requestID, modelID string, config shared.Config) models.EventSource {
-	return defaultresponses.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes)
+func (*responsesAdapter) newSource(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
+	return defaultresponses.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, limits))
 }

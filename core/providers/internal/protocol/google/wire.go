@@ -42,9 +42,20 @@ type functionCallWire struct {
 }
 
 type functionResponseWire struct {
-	ID       string          `json:"id,omitempty"`
-	Name     string          `json:"name"`
-	Response json.RawMessage `json:"response"`
+	ID       string                     `json:"id,omitempty"`
+	Name     string                     `json:"name"`
+	Response json.RawMessage            `json:"response"`
+	Parts    []functionResponsePartWire `json:"parts,omitempty"`
+}
+
+type functionResponsePartWire struct {
+	InlineData *functionResponseBlobWire `json:"inlineData"`
+}
+
+type functionResponseBlobWire struct {
+	MIMEType    string `json:"mimeType"`
+	Data        string `json:"data"`
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type toolContainer struct {

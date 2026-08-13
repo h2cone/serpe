@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { parseSSE } from "./sse";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearAPIToken, setAPIToken } from "./auth";
+import { parseSSE, SSEDisconnectError, streamRun } from "./sse";
 import { WireProtocolError } from "./wire";
 
 function readerFrom(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
@@ -16,6 +17,12 @@ function readerFrom(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
     releaseLock: () => {},
   } as ReadableStreamDefaultReader<Uint8Array>;
 }
+
+afterEach(() => {
+  clearAPIToken();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("parseSSE", () => {
   it("parses multiple frames", async () => {
@@ -66,5 +73,81 @@ describe("parseSSE", () => {
       frames.push(frame);
     }
     expect(frames).toEqual([]);
+  });
+
+  it("rejects malformed JSON instead of silently skipping it", async () => {
+    const consume = async () => {
+      for await (const _ of parseSSE(readerFrom(["data: {broken}\n\n"]))) {
+        // consume
+      }
+    };
+    await expect(consume()).rejects.toBeInstanceOf(WireProtocolError);
+  });
+
+  it("cancels and releases the reader after a protocol failure", async () => {
+    const cancel = vi.fn(async () => {});
+    const releaseLock = vi.fn();
+    const reader = readerFrom(["data: {broken}\n\n"]);
+    reader.cancel = cancel;
+    reader.releaseLock = releaseLock;
+    const consume = async () => {
+      for await (const _ of parseSSE(reader)) {
+        // consume
+      }
+    };
+    await expect(consume()).rejects.toBeInstanceOf(WireProtocolError);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(releaseLock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed UTF-8 and releases the reader", async () => {
+    const releaseLock = vi.fn();
+    let read = false;
+    const reader = {
+      read: async () => {
+        if (read) return { done: true, value: undefined };
+        read = true;
+        return { done: false, value: new Uint8Array([0xff]) };
+      },
+      cancel: async () => {},
+      closed: Promise.resolve(undefined),
+      releaseLock,
+    } as ReadableStreamDefaultReader<Uint8Array>;
+    const consume = async () => {
+      for await (const _ of parseSSE(reader)) {
+        // consume
+      }
+    };
+    await expect(consume()).rejects.toBeInstanceOf(WireProtocolError);
+    expect(releaseLock).toHaveBeenCalledOnce();
+  });
+
+  it("requires a terminal event and authenticates the fetch", async () => {
+    vi.stubGlobal("window", {});
+    const token = "B".repeat(32);
+    setAPIToken(token);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"t":"run_start"}\n\n'));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(body, { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const consume = async () => {
+      for await (const _ of streamRun({ session_id: "s1", prompt: "hi" })) {
+        // consume
+      }
+    };
+    await expect(consume()).rejects.toBeInstanceOf(SSEDisconnectError);
+    const init = fetchMock.mock.calls[0][1];
+    expect(init).toBeDefined();
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      `Bearer ${token}`,
+    );
+    expect(init?.credentials).toBe("omit");
   });
 });

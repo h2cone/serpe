@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "react-router dev",
-    "build": "react-router build",
+    "build": "react-router build && node scripts/harden-build.mjs",
     "start": "node server.ts",
     "typecheck": "react-router typegen && tsc --noEmit",
     "test": "vitest run"
@@ -15,9 +15,7 @@
     "isbot": "^5.1.28",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-markdown": "^10.1.0",
-    "react-router": "^7.6.0",
-    "remark-gfm": "^4.0.1"
+    "react-router": "^7.6.0"
   },
   "devDependencies": {
     "@react-router/dev": "^7.6.0",

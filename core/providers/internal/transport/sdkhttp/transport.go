@@ -3,11 +3,11 @@ package sdkhttp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/providers/internal/shared"
@@ -57,6 +57,18 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		cfg.Headers = make(http.Header)
 	}
 	cfg.PlaceholderAuth = append([]string(nil), cfg.PlaceholderAuth...)
+	if cfg.Limits.MaxRequestBytes == 0 {
+		cfg.Limits.MaxRequestBytes = 32 << 20
+	}
+	if cfg.Limits.MaxResponseBytes == 0 {
+		cfg.Limits.MaxResponseBytes = 32 << 20
+	}
+	if cfg.Limits.MaxStreamResponseBytes == 0 {
+		cfg.Limits.MaxStreamResponseBytes = 32 << 20
+	}
+	if cfg.Limits.MaxErrorResponseBytes == 0 {
+		cfg.Limits.MaxErrorResponseBytes = 64 << 10
+	}
 	return &Bridge{cfg: cfg}
 }
 
@@ -131,6 +143,9 @@ func (b *Bridge) Do(req *http.Request) (*http.Response, error) {
 		out.Header.Set("Content-Type", "application/json")
 		out.Header.Del("Content-Encoding")
 	}
+	if err := boundRequestBody(out, b.cfg.Limits.MaxRequestBytes, b.cfg.Provider, operation); err != nil {
+		return nil, err
+	}
 
 	// Drop SDK/ambient/placeholder credentials before applying Config auth.
 	for _, name := range authHeaderNames {
@@ -188,13 +203,9 @@ func (b *Bridge) Do(req *http.Request) (*http.Response, error) {
 	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		// Leave body for the SDK to decode into its API error type. Limits are
-		// still enforced via a bounded wrapper so oversized error bodies cannot
-		// allocate unboundedly before the SDK reads them.
-		if response.Body == nil {
-			response.Body = http.NoBody
+		if err := b.prepareErrorResponse(response, operation); err != nil {
+			return nil, err
 		}
-		response.Body = httpx.LimitReadCloser(response.Body, b.cfg.Limits.MaxErrorResponseBytes, nil)
 		return response, nil
 	}
 	if response.Body == nil {
@@ -203,6 +214,14 @@ func (b *Bridge) Do(req *http.Request) (*http.Response, error) {
 			Code: "missing_body", HTTPStatus: response.StatusCode, RequestID: httpx.RequestID(response.Header),
 			Message: "successful response has no body",
 		}
+	}
+	responseLimit := b.cfg.Limits.MaxResponseBytes
+	if strings.Contains(strings.ToLower(out.Header.Get("Accept")), "text/event-stream") {
+		responseLimit = b.cfg.Limits.MaxStreamResponseBytes
+	}
+	if err := httpx.PrepareResponseBody(response, responseLimit, b.cfg.Provider, operation); err != nil {
+		httpx.DrainAndClose(response.Body, 0)
+		return nil, err
 	}
 
 	stream := strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") ||
@@ -227,58 +246,89 @@ func (b *Bridge) Do(req *http.Request) (*http.Response, error) {
 			capture.setStreamBody(response.Body)
 		}
 	} else {
-		requestID := ""
+		data, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return nil, err
+		}
+		if err := shared.ValidateUnaryJSON(data); err != nil {
+			return nil, &models.Error{
+				Kind: models.ErrorProtocol, Provider: b.cfg.Provider, Operation: operation,
+				Code: "invalid_json", HTTPStatus: response.StatusCode, RequestID: httpx.RequestID(response.Header),
+				Message: "successful response is not strict JSON", Cause: err,
+			}
+		}
 		if capture != nil {
-			requestID = capture.RequestID()
+			capture.Body = append([]byte(nil), data...)
 		}
-		overflow := &models.Error{
-			Kind: models.ErrorProtocol, Provider: b.cfg.Provider, Operation: operation,
-			Code: "response_too_large", HTTPStatus: response.StatusCode, RequestID: requestID,
-			Message: fmt.Sprintf("response exceeds %d bytes", b.cfg.Limits.MaxResponseBytes),
-		}
-		response.Body = httpx.LimitReadCloser(response.Body, b.cfg.Limits.MaxResponseBytes, overflow)
-		if capture != nil {
-			// Tee unary body so official adapters that lack RawJSON can still
-			// decode the wire payload with the default protocol codec.
-			response.Body = &teeBody{rc: response.Body, capture: capture}
-		}
+		response.Body = io.NopCloser(bytes.NewReader(data))
+		response.ContentLength = int64(len(data))
 	}
 	return response, nil
 }
 
-// teeBody copies successful unary response bytes into Capture.Body while the
-// SDK decoder reads them.
-type teeBody struct {
-	rc      io.ReadCloser
-	capture *Capture
-	buf     bytes.Buffer
-	mu      sync.Mutex
-}
-
-func (t *teeBody) Read(p []byte) (int, error) {
-	n, err := t.rc.Read(p)
-	if n > 0 {
-		t.mu.Lock()
-		_, _ = t.buf.Write(p[:n])
-		t.mu.Unlock()
+func (b *Bridge) prepareErrorResponse(response *http.Response, operation string) error {
+	if response.Body == nil {
+		kind, retryable := httpx.StatusKind(response.StatusCode)
+		return &models.Error{Kind: kind, Provider: b.cfg.Provider, Operation: operation, HTTPStatus: response.StatusCode,
+			Message: http.StatusText(response.StatusCode), RequestID: httpx.RequestID(response.Header), Retryable: retryable}
 	}
-	if err == io.EOF {
-		t.mu.Lock()
-		if t.capture != nil {
-			t.capture.Body = append([]byte(nil), t.buf.Bytes()...)
+	if err := httpx.PrepareResponseBody(response, b.cfg.Limits.MaxErrorResponseBytes, b.cfg.Provider, operation); err != nil {
+		httpx.DrainAndClose(response.Body, 0)
+		return err
+	}
+	data, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return err
+	}
+	trimmed := bytes.TrimSpace(data)
+	looksJSON := httpx.HasMediaType(response.Header.Get("Content-Type"), "application/json") ||
+		strings.HasSuffix(strings.ToLower(strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])), "+json") ||
+		len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
+	if looksJSON {
+		if err := shared.ValidateErrorJSON(data); err != nil {
+			return &models.Error{Kind: models.ErrorProtocol, Provider: b.cfg.Provider, Operation: operation,
+				Code: "invalid_json", HTTPStatus: response.StatusCode, RequestID: httpx.RequestID(response.Header),
+				Message: "provider returned an invalid JSON error response", Cause: err}
 		}
-		t.mu.Unlock()
+		response.Body = io.NopCloser(bytes.NewReader(data))
+		response.ContentLength = int64(len(data))
+		return nil
 	}
-	return n, err
+	kind, retryable := httpx.StatusKind(response.StatusCode)
+	message := http.StatusText(response.StatusCode)
+	if len(trimmed) > 0 {
+		message = "provider returned a non-JSON error response"
+	}
+	return &models.Error{Kind: kind, Provider: b.cfg.Provider, Operation: operation, HTTPStatus: response.StatusCode,
+		Message: message, RequestID: httpx.RequestID(response.Header), RetryAfter: httpx.RetryAfter(response.Header.Get("Retry-After")), Retryable: retryable}
 }
 
-func (t *teeBody) Close() error {
-	t.mu.Lock()
-	if t.capture != nil && len(t.capture.Body) == 0 && t.buf.Len() > 0 {
-		t.capture.Body = append([]byte(nil), t.buf.Bytes()...)
+func boundRequestBody(request *http.Request, limit int64, provider, operation string) error {
+	if request.Body == nil {
+		return nil
 	}
-	t.mu.Unlock()
-	return t.rc.Close()
+	if request.ContentLength > limit {
+		_ = request.Body.Close()
+		return &models.Error{Kind: models.ErrorInvalidRequest, Provider: provider, Operation: operation, Code: "request_too_large", Message: "encoded request exceeds provider limit"}
+	}
+	payload, err := io.ReadAll(io.LimitReader(request.Body, limit+1))
+	closeErr := request.Body.Close()
+	if err != nil || closeErr != nil {
+		return &models.Error{Kind: models.ErrorInvalidRequest, Provider: provider, Operation: operation, Code: "request_read_error", Message: "failed to inspect encoded request", Cause: errors.Join(err, closeErr)}
+	}
+	if int64(len(payload)) > limit {
+		return &models.Error{Kind: models.ErrorInvalidRequest, Provider: provider, Operation: operation, Code: "request_too_large", Message: "encoded request exceeds provider limit"}
+	}
+	if err := shared.ValidateUnaryJSON(payload); err != nil {
+		return &models.Error{Kind: models.ErrorInvalidRequest, Provider: provider, Operation: operation, Code: "invalid_request_json", Message: "SDK encoded non-strict JSON", Cause: err}
+	}
+	request.Body = io.NopCloser(bytes.NewReader(payload))
+	request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(payload)), nil }
+	request.ContentLength = int64(len(payload))
+	request.TransferEncoding = nil
+	return nil
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

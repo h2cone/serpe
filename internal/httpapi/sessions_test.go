@@ -2,15 +2,49 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestUnsupportedDeadlinesFailBeforeMutation(t *testing.T) {
+	srv, manager := newTestServer(t, nil, nil, nil)
+	rr := httptest.NewRecorder() // deliberately lacks ResponseController deadlines
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError || !bytes.Contains(rr.Body.Bytes(), []byte("deadline_unsupported")) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	sessions, err := manager.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("unsupported deadline mutated the store: %d sessions", len(sessions))
+	}
+}
+
+type readDeadlineOnlyRecorder struct{ *httptest.ResponseRecorder }
+
+func (*readDeadlineOnlyRecorder) SetReadDeadline(time.Time) error { return nil }
+
+func TestUnsupportedWriteDeadlineFailsBeforeHeaders(t *testing.T) {
+	srv, _ := newTestServer(t, nil, nil, nil)
+	rr := &readDeadlineOnlyRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError || !bytes.Contains(rr.Body.Bytes(), []byte("deadline_unsupported")) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
 
 func TestHealth(t *testing.T) {
 	srv, _ := newTestServer(t, nil, nil, nil)
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -36,8 +70,9 @@ func TestSessionsCRUD(t *testing.T) {
 	h := srv.Handler()
 
 	// Create
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewBufferString(`{"title":"Hello"}`))
+	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", rr.Code, rr.Body.String())
@@ -51,7 +86,7 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// List
-	rr = httptest.NewRecorder()
+	rr = newRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -66,7 +101,7 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Get
-	rr = httptest.NewRecorder()
+	rr = newRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/sessions/a", nil)
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -74,8 +109,9 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Patch title
-	rr = httptest.NewRecorder()
+	rr = newRecorder()
 	req = httptest.NewRequest(http.MethodPatch, "/api/sessions/a", bytes.NewBufferString(`{"title":"Renamed"}`))
+	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", rr.Code, rr.Body.String())
@@ -87,8 +123,9 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Fork
-	rr = httptest.NewRecorder()
+	rr = newRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/sessions/a/fork", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("fork status=%d body=%s", rr.Code, rr.Body.String())
@@ -100,13 +137,13 @@ func TestSessionsCRUD(t *testing.T) {
 	}
 
 	// Delete
-	rr = httptest.NewRecorder()
+	rr = newRecorder()
 	req = httptest.NewRequest(http.MethodDelete, "/api/sessions/a", nil)
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d", rr.Code)
 	}
-	rr = httptest.NewRecorder()
+	rr = newRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/sessions/a", nil)
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {

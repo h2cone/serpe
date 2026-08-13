@@ -14,7 +14,7 @@ func TestCodecRoundTripAllContentKinds(t *testing.T) {
 	s := &Session{
 		ID:        "sess-1",
 		ParentID:  "",
-		CWD:       "/work",
+		CWD:       testCWD("work"),
 		CreatedAt: now,
 		UpdatedAt: now.Add(time.Second),
 		Metadata:  map[string]string{"title": "repo Q&A"},
@@ -80,7 +80,7 @@ func TestCodecRoundTripAllContentKinds(t *testing.T) {
 func TestCodecParentIDEmptyAndNilMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	s := &Session{
-		ID: "a", CWD: "/w", CreatedAt: now, UpdatedAt: now,
+		ID: "a", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now,
 		Messages: []models.Message{models.NewUserMessage(models.Text("hi"))},
 	}
 	data, err := marshalSession(s)
@@ -111,7 +111,7 @@ func TestCodecRejectsInvalidToolArguments(t *testing.T) {
 	// Bypass Validate by building via marshal path after constructing invalid
 	// content that fails encodeContent's IsObject check.
 	s := &Session{
-		ID: "a", CWD: "/w", CreatedAt: now, UpdatedAt: now,
+		ID: "a", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now,
 		Messages: []models.Message{
 			models.NewAssistantMessage(
 				models.ToolCallContent("c1", "f", json.RawMessage(`[]`)),

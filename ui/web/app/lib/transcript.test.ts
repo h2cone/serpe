@@ -79,7 +79,9 @@ describe("transcript reducer", () => {
     ]);
     expect(s.streaming).toBe(false);
     expect(s.error).toBeNull();
-    const tool = s.stream?.tools["c1"];
+    const tool = Array.from(s.stream?.tools.values() ?? []).find(
+      (candidate) => candidate.id === "c1",
+    );
     expect(tool).toMatchObject({
       id: "c1",
       name: "now",
@@ -107,5 +109,72 @@ describe("transcript reducer", () => {
     s = applyFrame(s, { t: "run_end", stop: "max_model_turns" });
     expect(s.streaming).toBe(true);
     expect(s.stop).toBe("max_model_turns");
+  });
+
+  it("keeps out-of-order tool completions independent and settles failures", () => {
+    const s = applyAll([
+      { t: "run_start" },
+      {
+        t: "part_start",
+        turn: 1,
+        part: 0,
+        kind: "tool_call",
+        call_id: "__proto__",
+        name: "first",
+      },
+      {
+        t: "part_start",
+        turn: 1,
+        part: 1,
+        kind: "tool_call",
+        call_id: "c2",
+        name: "second",
+      },
+      {
+        t: "tool_start",
+        turn: 1,
+        idx: 0,
+        call: { id: "__proto__", name: "first" },
+      },
+      {
+        t: "tool_start",
+        turn: 1,
+        idx: 1,
+        call: { id: "c2", name: "second" },
+      },
+      {
+        t: "tool_end",
+        turn: 1,
+        idx: 1,
+        call: { id: "c2", name: "second" },
+        result: { content: [{ type: "text", text: "second done" }] },
+      },
+      { t: "error", message: "connection lost" },
+    ]);
+    const tools = Array.from(s.stream?.tools.values() ?? []);
+    expect(tools).toHaveLength(2);
+    expect(tools.find((tool) => tool.id === "c2")?.status).toBe("done");
+    expect(tools.find((tool) => tool.id === "__proto__")?.status).toBe(
+      "failed",
+    );
+    expect(s.streaming).toBe(false);
+  });
+
+  it("rekeys a provisional part when its call ID arrives", () => {
+    const s = applyAll([
+      { t: "run_start" },
+      { t: "part_start", turn: 1, part: 3, kind: "tool_call", name: "read" },
+      {
+        t: "delta",
+        turn: 1,
+        part: 3,
+        kind: "tool_arguments",
+        call_id: "call-3",
+        text: "{}",
+      },
+    ]);
+    const tools = Array.from(s.stream?.tools.values() ?? []);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ id: "call-3", argsText: "{}" });
   });
 });

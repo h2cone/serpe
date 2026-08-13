@@ -3,6 +3,7 @@ package google
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"slices"
@@ -27,6 +28,7 @@ type googleSource struct {
 	usage              *models.Usage
 	promptBlock        string
 	promptBlockMessage string
+	toolGuard          *shared.ToolCallGuard
 }
 
 type googleCandidateState struct {
@@ -48,8 +50,12 @@ type googlePartState struct {
 
 // NewSSEStreamSource builds a Gemini event source from a raw SSE response
 // obtained through an official SDK request.
-func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, stateLimit int64) models.EventSource {
-	return &googleSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, stateLimit: stateLimit, candidates: make(map[int]*googleCandidateState)}
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, stateLimit int64, toolLimits ...shared.ToolCallLimits) models.EventSource {
+	limits := shared.DefaultToolCallLimits()
+	if len(toolLimits) > 0 {
+		limits = toolLimits[0]
+	}
+	return &googleSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, stateLimit: stateLimit, candidates: make(map[int]*googleCandidateState), toolGuard: shared.NewToolCallGuard(limits)}
 }
 
 func (s *googleSource) Next() (models.Event, error) {
@@ -78,6 +84,9 @@ func (s *googleSource) Next() (models.Event, error) {
 		eventID := wireEvent.ID
 		if len(data) == 0 {
 			continue
+		}
+		if err := shared.ValidateStreamJSON(data); err != nil {
+			return models.Event{}, streamProtocol("invalid_json", "Gemini stream event is not strict JSON", err)
 		}
 		var response responseWire
 		if err := json.Unmarshal(data, &response); err != nil {
@@ -185,6 +194,13 @@ func (s *googleSource) consumePart(candidateIndex int, part partWire, mayContinu
 	case part.FunctionCall != nil:
 		if part.FunctionCall.Name == "" || !shared.JSONObject(part.FunctionCall.Args) {
 			return streamProtocol("invalid_tool_call", "Gemini functionCall has invalid name or args", nil)
+		}
+		toolKey := fmt.Sprintf("%d/%d", candidateIndex, candidate.nextPart)
+		if err := s.toolGuard.Start(toolKey, part.FunctionCall.ID, part.FunctionCall.Name); err != nil {
+			return streamProtocol("response_limit", "Gemini tool-call response exceeds configured limit", err)
+		}
+		if err := s.toolGuard.AddArguments(toolKey, len(part.FunctionCall.Args)); err != nil {
+			return streamProtocol("response_limit", "Gemini tool-call response exceeds configured limit", err)
 		}
 		s.closeActivePart(candidateIndex, eventID)
 		partIndex := candidate.nextPart

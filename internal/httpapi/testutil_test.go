@@ -2,15 +2,17 @@ package httpapi_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
+	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/runtime/sessions"
+	"github.com/h2cone/serpe/core/tools"
 	"github.com/h2cone/serpe/internal/httpapi"
+	"github.com/h2cone/serpe/runtime/loops"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // scriptedModel implements models.Model with a fixed sequence of responses.
@@ -188,15 +190,24 @@ func (nowTool) Definition() models.Tool {
 	}
 }
 
-func (nowTool) Execute(ctx context.Context, arguments json.RawMessage) (runtime.ToolOutput, error) {
-	return runtime.TextResult("12:00"), nil
+func (nowTool) Execute(ctx context.Context, arguments tools.Invocation) (tools.Output, error) {
+	return tools.Text("12:00"), nil
 }
 
-func newTestServer(t *testing.T, model models.Model, tools []runtime.Tool, newID func() string) (*httpapi.Server, *sessions.Manager) {
-	return newTestServerWithStore(t, model, tools, newID, sessions.NewMemoryStore())
+func mustExec(t *testing.T, ts ...tools.Tool) *tools.Executor {
+	t.Helper()
+	e, err := tools.New(tools.Config{}, ts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 
-func newTestServerWithStore(t *testing.T, model models.Model, tools []runtime.Tool, newID func() string, store sessions.Store) (*httpapi.Server, *sessions.Manager) {
+func newTestServer(t *testing.T, model models.Model, exec *tools.Executor, newID func() string) (*httpapi.Server, *sessions.Manager) {
+	return newTestServerWithStore(t, model, exec, newID, sessions.NewMemoryStore())
+}
+
+func newTestServerWithStore(t *testing.T, model models.Model, exec *tools.Executor, newID func() string, store sessions.Store) (*httpapi.Server, *sessions.Manager) {
 	t.Helper()
 	if model == nil {
 		model = &scriptedModel{responses: []*models.Response{textResponse("hello")}}
@@ -204,22 +215,39 @@ func newTestServerWithStore(t *testing.T, model models.Model, tools []runtime.To
 	if newID == nil {
 		newID = func() string { return "sess-1" }
 	}
-	runner, err := runtime.NewRunner(runtime.Config{Model: model, Tools: tools})
+	runner, err := loops.New(loops.Config{Model: model, Tools: exec})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	mgr, err := sessions.NewManager(store)
+	mgr, err := sessions.NewManager(store, sessions.Limits{})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	srv, err := httpapi.New(httpapi.Config{
-		Runner:  runner,
-		Manager: mgr,
-		CWD:     "/tmp",
-		NewID:   newID,
-	})
+	t.Cleanup(func() { _ = mgr.Close() })
+	serverConfig := httpapi.Config{
+		Runner:              runner,
+		Manager:             mgr,
+		CWD:                 t.TempDir(),
+		NewID:               newID,
+		AllowInsecureNoAuth: exec == nil,
+	}
+	if exec != nil {
+		serverConfig.BearerToken = testBearerToken
+	}
+	srv, err := httpapi.New(serverConfig)
 	if err != nil {
 		t.Fatalf("httpapi.New: %v", err)
 	}
 	return srv, mgr
 }
+
+const testBearerToken = "0123456789abcdef0123456789abcdef"
+
+type deadlineRecorder struct{ *httptest.ResponseRecorder }
+
+func newRecorder() *deadlineRecorder {
+	return &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+}
+
+func (*deadlineRecorder) SetReadDeadline(time.Time) error  { return nil }
+func (*deadlineRecorder) SetWriteDeadline(time.Time) error { return nil }

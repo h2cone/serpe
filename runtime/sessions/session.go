@@ -1,9 +1,11 @@
 package sessions
 
 import (
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/h2cone/serpe/core/models"
 )
@@ -50,8 +52,8 @@ func (s *Session) Validate() error {
 	if s.ParentID != "" && (!validID(s.ParentID) || s.ParentID == s.ID) {
 		return invalidf("invalid parent ID %q", s.ParentID)
 	}
-	if strings.TrimSpace(s.CWD) == "" {
-		return invalidf("CWD is required")
+	if err := validateCWD(s.CWD); err != nil {
+		return err
 	}
 	if s.CreatedAt.IsZero() || s.UpdatedAt.IsZero() {
 		return invalidf("CreatedAt and UpdatedAt must be set")
@@ -69,7 +71,37 @@ func (s *Session) Validate() error {
 			return invalidf("invalid metadata key %q", k)
 		}
 	}
+	if title, ok := s.Metadata["title"]; ok {
+		if !utf8.ValidString(title) || len(title) > 4<<10 || containsControl(title) {
+			return invalidf("metadata title is invalid or exceeds 4096 bytes")
+		}
+	}
 	return nil
+}
+
+func validateCWD(cwd string) error {
+	if cwd == "" || !utf8.ValidString(cwd) {
+		return invalidf("CWD is required and must be valid UTF-8")
+	}
+	if len(cwd) > 32<<10 {
+		return invalidf("CWD exceeds 32768 bytes")
+	}
+	if containsControl(cwd) {
+		return invalidf("CWD contains a control character")
+	}
+	if !filepath.IsAbs(cwd) {
+		return invalidf("CWD must be absolute")
+	}
+	return nil
+}
+
+func containsControl(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Clone returns a deep copy safe for the caller to retain and modify.
@@ -116,6 +148,10 @@ func validID(id string) bool {
 	}
 	return !isWindowsReservedName(id)
 }
+
+// ValidID reports whether id satisfies the portable Store/HTTP identifier
+// grammar. Parent IDs may additionally be empty where their field permits it.
+func ValidID(id string) bool { return validID(id) }
 
 // isWindowsReservedName reports CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9
 // (case-insensitive), including extension variants such as CON.txt.

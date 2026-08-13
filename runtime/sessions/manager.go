@@ -4,107 +4,271 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"reflect"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/internal/sessionwire"
 )
 
-// Manager serializes composite write operations per session ID and owns the
-// commit semantics: an operation works on a private copy and only becomes
-// visible when validation and the store write both succeed. Validation,
-// cancellation, and store errors never pollute the committed transcript.
+// Manager owns one Store's lifecycle and serializes composite writes per
+// session ID. Successful construction transfers exclusive Store ownership to
+// the Manager; callers must thereafter use Manager.Close.
 type Manager struct {
-	store Store
+	store  Store
+	limits Limits
+
+	stateMu   sync.Mutex
+	stateCond *sync.Cond
+	active    int
+	closing   bool
+	closeDone chan struct{}
+	closeErr  error
+
 	mu    sync.Mutex
 	locks map[string]*sessionLock
 }
 
-// sessionLock is a per-ID write lease with reference counting so the lock
-// table cannot grow forever.
+// sessionLock is a cancellable per-ID lease. refs includes holders and
+// waiters, allowing unused entries to be removed without racing acquisition.
 type sessionLock struct {
-	mu   sync.Mutex
-	refs int
+	token chan struct{}
+	refs  int
 }
 
-// NewManager creates a Manager over the given store. It returns an error if
-// store is nil; it never creates an implicit global store.
-func NewManager(store Store) (*Manager, error) {
-	if store == nil {
+// SessionPatch is an atomic intent-shaped update. A nil CWD is unchanged. A
+// nil metadata value deletes that key; unmentioned keys are preserved.
+type SessionPatch struct {
+	CWD      *string
+	Metadata map[string]*string
+}
+
+// NewManager validates limits and takes lifecycle ownership of store. On
+// failure ownership is not transferred and store is not closed.
+func NewManager(store Store, limits Limits) (*Manager, error) {
+	if store == nil || isNilStore(store) {
 		return nil, fmt.Errorf("sessions: store is required")
 	}
-	return &Manager{store: store, locks: make(map[string]*sessionLock)}, nil
+	normalized, err := normalizeLimits(limits)
+	if err != nil {
+		return nil, err
+	}
+	manager := &Manager{
+		store:     store,
+		limits:    normalized,
+		closeDone: make(chan struct{}),
+		locks:     make(map[string]*sessionLock),
+	}
+	manager.stateCond = sync.NewCond(&manager.stateMu)
+	return manager, nil
 }
 
-// lock acquires the write lease for id and returns its release function.
-func (m *Manager) lock(id string) func() {
-	m.mu.Lock()
-	l, ok := m.locks[id]
-	if !ok {
-		l = &sessionLock{}
-		m.locks[id] = l
+func isNilStore(store Store) bool {
+	value := reflect.ValueOf(store)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
-	l.refs++
+}
+
+// Limits returns the normalized immutable admission limits by value.
+func (m *Manager) Limits() Limits {
+	if m == nil {
+		return Limits{}
+	}
+	return m.limits
+}
+
+func (m *Manager) enter(ctx context.Context) error {
+	if m == nil {
+		return ErrClosed
+	}
+	m.stateMu.Lock()
+	if m.closing {
+		m.stateMu.Unlock()
+		return ErrClosed
+	}
+	m.active++
+	m.stateMu.Unlock()
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			m.leave()
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) leave() {
+	m.stateMu.Lock()
+	m.active--
+	if m.active == 0 {
+		m.stateCond.Broadcast()
+	}
+	m.stateMu.Unlock()
+}
+
+// Close is idempotent and concurrent-safe. The first call stops admission,
+// waits for entered methods/leases, then closes the owned Store exactly once;
+// every caller receives the same cached result.
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.stateMu.Lock()
+	if m.closing {
+		done := m.closeDone
+		m.stateMu.Unlock()
+		<-done
+		m.stateMu.Lock()
+		err := m.closeErr
+		m.stateMu.Unlock()
+		return err
+	}
+	m.closing = true
+	for m.active != 0 {
+		m.stateCond.Wait()
+	}
+	m.stateMu.Unlock()
+
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("sessions: Store.Close panic: %v", recovered)
+			}
+		}()
+		return m.store.Close()
+	}()
+	m.stateMu.Lock()
+	m.closeErr = err
+	close(m.closeDone)
+	m.stateMu.Unlock()
+	return err
+}
+
+func (m *Manager) acquire(ctx context.Context, id string) (func(), error) {
+	m.mu.Lock()
+	lock := m.locks[id]
+	if lock == nil {
+		lock = &sessionLock{token: make(chan struct{}, 1)}
+		lock.token <- struct{}{}
+		m.locks[id] = lock
+	}
+	lock.refs++
 	m.mu.Unlock()
 
-	l.mu.Lock()
-	return func() {
-		l.mu.Unlock()
-		m.mu.Lock()
-		l.refs--
-		if l.refs == 0 {
-			delete(m.locks, id)
-		}
-		m.mu.Unlock()
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done()
+	}
+	select {
+	case <-lock.token:
+		return func() {
+			lock.token <- struct{}{}
+			m.releaseRef(id, lock)
+		}, nil
+	case <-done:
+		m.releaseRef(id, lock)
+		return nil, ctx.Err()
 	}
 }
 
-// lockTwo acquires the write leases for two IDs in stable order to avoid
-// lock-order deadlocks, and returns a release function for both.
-func (m *Manager) lockTwo(a, b string) func() {
-	if a == b {
-		return m.lock(a)
+func (m *Manager) releaseRef(id string, lock *sessionLock) {
+	m.mu.Lock()
+	lock.refs--
+	if lock.refs == 0 && m.locks[id] == lock {
+		delete(m.locks, id)
 	}
-	if a > b {
-		a, b = b, a
-	}
-	unlockA := m.lock(a)
-	unlockB := m.lock(b)
-	return func() {
-		unlockB()
-		unlockA()
-	}
+	m.mu.Unlock()
 }
 
-// load is the single record-to-domain boundary. Backends never interpret a
-// Session; Manager decodes, validates, and verifies that the stored payload's
-// identity matches its storage key.
+func (m *Manager) acquireTwo(ctx context.Context, first, second string) (func(), error) {
+	if first == second {
+		return m.acquire(ctx, first)
+	}
+	if first > second {
+		first, second = second, first
+	}
+	releaseFirst, err := m.acquire(ctx, first)
+	if err != nil {
+		return nil, err
+	}
+	releaseSecond, err := m.acquire(ctx, second)
+	if err != nil {
+		releaseFirst()
+		return nil, err
+	}
+	return func() {
+		releaseSecond()
+		releaseFirst()
+	}, nil
+}
+
 func (m *Manager) load(ctx context.Context, id string) (*Session, error) {
 	data, err := m.store.Load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	got, err := unmarshalSession(data)
+	session, err := unmarshalSession(data)
 	if err != nil {
 		return nil, err
 	}
-	if got.ID != id {
-		return nil, invalidf("record ID %q does not match key %q", got.ID, id)
+	if session.ID != id {
+		return nil, invalidf("record ID %q does not match key %q", session.ID, id)
 	}
-	return got, nil
+	if err := m.validateMessageSizes(session.Messages); err != nil {
+		return nil, err
+	}
+	return session, nil
 }
 
-// Create validates and saves the snapshot, then returns an independent copy.
-// The input is cloned before encoding, so no caller-owned Session memory
-// crosses the Store boundary.
+func (m *Manager) validateMessageSizes(messages []models.Message) error {
+	for index := range messages {
+		size, err := sessionwire.MessageFragmentSize(messages[index])
+		if err != nil {
+			return invalidf("message %d projection: %v", index, err)
+		}
+		if size > m.limits.MaxSessionMessageJSONBytes {
+			return fmt.Errorf("%w: message %d exceeds %d JSON bytes", ErrRecordTooLarge, index, m.limits.MaxSessionMessageJSONBytes)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) validateCommit(session *Session) error {
+	if err := session.Validate(); err != nil {
+		return err
+	}
+	return m.validateMessageSizes(session.Messages)
+}
+
+// Create validates and atomically inserts a private snapshot.
 func (m *Manager) Create(ctx context.Context, session *Session) (*Session, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, err
+	}
+	defer m.leave()
+	if session == nil {
+		return nil, invalidf("session is nil")
+	}
+	// Validate and measure caller-owned data before making a potentially large
+	// defensive copy. Callers must not mutate it concurrently with Create.
+	if err := m.validateCommit(session); err != nil {
+		return nil, err
+	}
 	commit := session.Clone()
 	data, err := marshalSession(commit)
 	if err != nil {
 		return nil, err
 	}
-	release := m.lock(commit.ID)
+	release, err := m.acquire(ctx, commit.ID)
+	if err != nil {
+		return nil, err
+	}
 	defer release()
 	if err := m.store.Create(ctx, commit.ID, data); err != nil {
 		return nil, err
@@ -112,67 +276,99 @@ func (m *Manager) Create(ctx context.Context, session *Session) (*Session, error
 	return commit.Clone(), nil
 }
 
-// Get loads an independent, validated snapshot.
+// Get loads an independent validated snapshot.
 func (m *Manager) Get(ctx context.Context, id string) (*Session, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, err
+	}
+	defer m.leave()
 	if !validID(id) {
 		return nil, invalidf("get: invalid ID %q", id)
 	}
 	return m.load(ctx, id)
 }
 
-// List returns independent snapshots of every stored session. Order is
-// undefined; the store is not required to sort. Invalid stored rows are
-// skipped so a single corrupt record cannot break the whole listing.
+// List is potentially expensive and retained for non-HTTP callers.
 func (m *Manager) List(ctx context.Context) ([]*Session, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, err
+	}
+	defer m.leave()
 	all, err := m.store.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*Session, 0, len(all))
 	for _, record := range all {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if !validID(record.ID) {
 			continue
 		}
-		s, err := unmarshalSession(record.Data)
-		if err != nil || s.ID != record.ID {
+		session, err := unmarshalSession(record.Data)
+		if err != nil || session.ID != record.ID || m.validateMessageSizes(session.Messages) != nil {
 			continue
 		}
-		out = append(out, s)
+		out = append(out, session)
 	}
 	return out, nil
 }
 
-// Fork deep-copies the source's CWD, Messages, and Metadata into a new
-// session with the given ID, ParentID set to the source ID, and fresh
-// creation/update timestamps. It creates nothing when source and new ID are
-// the same, the source is missing, or the new ID already exists.
-func (m *Manager) Fork(ctx context.Context, sourceID, newID string) (*Session, error) {
-	if !validID(sourceID) || !validID(newID) {
-		return nil, invalidf("fork: invalid ID")
+// ListPage loads at most one bounded ID page in ID order. Corrupt or deleted
+// candidates are skipped without unbounded refill scanning.
+func (m *Manager) ListPage(ctx context.Context, afterID string, limit int) ([]*Session, string, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, "", err
 	}
-	if sourceID == newID {
-		return nil, invalidf("fork: source and new ID must differ")
+	defer m.leave()
+	ids, next, err := m.store.ListIDsPage(ctx, afterID, limit)
+	if err != nil {
+		return nil, "", err
 	}
-	release := m.lockTwo(sourceID, newID)
-	defer release()
+	out := make([]*Session, 0, len(ids))
+	for _, id := range ids {
+		session, err := m.load(ctx, id)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidSession) || errors.Is(err, ErrRecordTooLarge) {
+				continue
+			}
+			return nil, "", err
+		}
+		out = append(out, session)
+	}
+	return out, next, nil
+}
 
-	src, err := m.load(ctx, sourceID)
+// Fork copies a source snapshot into a newly created child.
+func (m *Manager) Fork(ctx context.Context, sourceID, newID string) (*Session, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, err
+	}
+	defer m.leave()
+	if !validID(sourceID) || !validID(newID) || sourceID == newID {
+		return nil, invalidf("fork: invalid or equal source/new ID")
+	}
+	release, err := m.acquireTwo(ctx, sourceID, newID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	source, err := m.load(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("fork: load source %q: %w", sourceID, err)
 	}
-	if _, err := m.store.Load(ctx, newID); err == nil {
-		return nil, ErrAlreadyExists
-	} else if !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
 	now := time.Now().UTC()
-	// Deep-copy the source so the child never aliases the source transcript or
-	// metadata before the two snapshots are encoded independently.
-	child := src.Clone()
+	child := source.Clone()
 	child.ID = newID
-	child.ParentID = src.ID
+	child.ParentID = source.ID
 	child.CreatedAt = now
 	child.UpdatedAt = now
+	if err := m.validateCommit(child); err != nil {
+		return nil, err
+	}
 	data, err := marshalSession(child)
 	if err != nil {
 		return nil, err
@@ -183,85 +379,127 @@ func (m *Manager) Fork(ctx context.Context, sourceID, newID string) (*Session, e
 	return child.Clone(), nil
 }
 
-// SetCWD atomically updates the session working directory.
-func (m *Manager) SetCWD(ctx context.Context, id, cwd string) (*Session, error) {
-	if strings.TrimSpace(cwd) == "" {
-		return nil, invalidf("set cwd: CWD is required")
+// Patch atomically applies CWD and metadata changes under one lease/Save.
+func (m *Manager) Patch(ctx context.Context, id string, patch SessionPatch) (*Session, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, err
 	}
-	return m.apply(ctx, id, func(s *Session) error {
-		s.CWD = cwd
-		return nil
-	})
-}
-
-// SetMetadata replaces the session metadata map. A nil map clears metadata.
-// Keys must satisfy the portable ID alphabet.
-func (m *Manager) SetMetadata(ctx context.Context, id string, metadata map[string]string) (*Session, error) {
-	return m.apply(ctx, id, func(s *Session) error {
-		if metadata == nil {
-			s.Metadata = nil
-			return nil
-		}
-		s.Metadata = make(map[string]string, len(metadata))
-		for k, v := range metadata {
-			s.Metadata[k] = v
-		}
-		return nil
-	})
-}
-
-// PatchMetadata atomically applies key changes to the current metadata. A
-// non-nil value sets a key and a nil value deletes it. Unmentioned keys are
-// preserved. The complete read-modify-write runs under the session's write
-// lease, so concurrent patches cannot overwrite unrelated keys.
-//
-// The changes map and pointed-to strings are copied before the write begins;
-// the caller may reuse or mutate them after PatchMetadata returns. An empty
-// patch performs a read without changing UpdatedAt.
-func (m *Manager) PatchMetadata(ctx context.Context, id string, changes map[string]*string) (*Session, error) {
-	if len(changes) == 0 {
-		return m.Get(ctx, id)
+	defer m.leave()
+	owned, err := clonePatch(patch)
+	if err != nil {
+		return nil, err
 	}
-	owned := make(map[string]*string, len(changes))
-	for key, value := range changes {
-		if !validID(key) {
-			return nil, invalidf("patch metadata: invalid key %q", key)
+	if owned.CWD == nil && len(owned.Metadata) == 0 {
+		if !validID(id) {
+			return nil, invalidf("patch: invalid ID %q", id)
 		}
-		if value == nil {
-			owned[key] = nil
-			continue
-		}
-		ownedValue := *value
-		owned[key] = &ownedValue
+		return m.load(ctx, id)
 	}
-	return m.apply(ctx, id, func(s *Session) error {
-		for key, value := range owned {
+	return m.apply(ctx, id, func(session *Session) error {
+		if owned.CWD != nil {
+			session.CWD = *owned.CWD
+		}
+		for key, value := range owned.Metadata {
 			if value == nil {
-				delete(s.Metadata, key)
+				delete(session.Metadata, key)
 				continue
 			}
-			if s.Metadata == nil {
-				s.Metadata = make(map[string]string)
+			if session.Metadata == nil {
+				session.Metadata = make(map[string]string)
 			}
-			s.Metadata[key] = *value
+			session.Metadata[key] = *value
 		}
-		if len(s.Metadata) == 0 {
-			s.Metadata = nil
+		if len(session.Metadata) == 0 {
+			session.Metadata = nil
 		}
 		return nil
 	})
 }
 
-// apply is the package-private load-mutate-validate-save transaction used by
-// intent-shaped writes. Its callbacks are defined next to the public method;
-// arbitrary caller code never runs while the per-session lease is held.
+func clonePatch(patch SessionPatch) (SessionPatch, error) {
+	var owned SessionPatch
+	if patch.CWD != nil {
+		cwd := *patch.CWD
+		if err := validateCWD(cwd); err != nil {
+			return SessionPatch{}, err
+		}
+		owned.CWD = &cwd
+	}
+	if len(patch.Metadata) > 0 {
+		owned.Metadata = make(map[string]*string, len(patch.Metadata))
+		for key, value := range patch.Metadata {
+			if !validID(key) {
+				return SessionPatch{}, invalidf("patch metadata: invalid key %q", key)
+			}
+			if value == nil {
+				owned.Metadata[key] = nil
+				continue
+			}
+			copyValue := *value
+			if key == "title" && (!validTextField(copyValue, 4<<10)) {
+				return SessionPatch{}, invalidf("metadata title is invalid or exceeds 4096 bytes")
+			}
+			owned.Metadata[key] = &copyValue
+		}
+	}
+	return owned, nil
+}
+
+func validTextField(value string, maxBytes int) bool {
+	if len(value) > maxBytes {
+		return false
+	}
+	return utf8.ValidString(value) && !containsControl(value)
+}
+
+// SetCWD delegates to the atomic Patch intent.
+func (m *Manager) SetCWD(ctx context.Context, id, cwd string) (*Session, error) {
+	return m.Patch(ctx, id, SessionPatch{CWD: &cwd})
+}
+
+// SetMetadata replaces the complete metadata map in one Save.
+func (m *Manager) SetMetadata(ctx context.Context, id string, metadata map[string]string) (*Session, error) {
+	if err := m.enter(ctx); err != nil {
+		return nil, err
+	}
+	defer m.leave()
+	owned := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		if !validID(key) {
+			return nil, invalidf("metadata: invalid key %q", key)
+		}
+		if key == "title" && !validTextField(value, 4<<10) {
+			return nil, invalidf("metadata title is invalid or exceeds 4096 bytes")
+		}
+		owned[key] = value
+	}
+	return m.apply(ctx, id, func(session *Session) error {
+		if len(owned) == 0 {
+			session.Metadata = nil
+			return nil
+		}
+		session.Metadata = make(map[string]string, len(owned))
+		for key, value := range owned {
+			session.Metadata[key] = value
+		}
+		return nil
+	})
+}
+
+// PatchMetadata delegates to Patch while preserving other fields.
+func (m *Manager) PatchMetadata(ctx context.Context, id string, changes map[string]*string) (*Session, error) {
+	return m.Patch(ctx, id, SessionPatch{Metadata: changes})
+}
+
 func (m *Manager) apply(ctx context.Context, id string, mutate func(*Session) error) (*Session, error) {
 	if !validID(id) {
 		return nil, invalidf("write: invalid ID %q", id)
 	}
-	release := m.lock(id)
+	release, err := m.acquire(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	defer release()
-
 	current, err := m.load(ctx, id)
 	if err != nil {
 		return nil, err
@@ -275,6 +513,9 @@ func (m *Manager) apply(ctx context.Context, id string, mutate func(*Session) er
 	} else {
 		work.UpdatedAt = current.UpdatedAt
 	}
+	if err := m.validateCommit(work); err != nil {
+		return nil, err
+	}
 	data, err := marshalSession(work)
 	if err != nil {
 		return nil, err
@@ -285,55 +526,78 @@ func (m *Manager) apply(ctx context.Context, id string, mutate func(*Session) er
 	return work.Clone(), nil
 }
 
-// Append commits the given messages in order as one atomic batch at the end
-// of the transcript. An empty batch is rejected with ErrInvalidSession.
+// Append commits messages in order as one atomic batch.
 func (m *Manager) Append(ctx context.Context, id string, messages ...models.Message) (*Session, error) {
-	if len(messages) == 0 {
-		return nil, invalidf("append: at least one message is required")
+	if err := m.enter(ctx); err != nil {
+		return nil, err
 	}
-	return m.apply(ctx, id, func(s *Session) error {
-		for i := range messages {
-			if err := messages[i].Validate(); err != nil {
-				return invalidf("append message %d: %v", i, err)
-			}
-			s.Messages = append(s.Messages, messages[i].Clone())
-		}
+	defer m.leave()
+	owned, err := m.cloneMessages(messages)
+	if err != nil {
+		return nil, err
+	}
+	return m.apply(ctx, id, func(session *Session) error {
+		session.Messages = append(session.Messages, owned...)
 		return nil
 	})
 }
 
-// AppendAt commits messages only when len(transcript) equals at (optimistic
-// CAS-append). When the length has changed, it returns ErrConflict and leaves
-// the stored transcript unchanged. An empty batch or negative at is rejected
-// with ErrInvalidSession.
+// AppendAt is a transcript-length CAS append.
 func (m *Manager) AppendAt(ctx context.Context, id string, at int, messages ...models.Message) (*Session, error) {
-	if len(messages) == 0 {
-		return nil, invalidf("append: at least one message is required")
+	if err := m.enter(ctx); err != nil {
+		return nil, err
 	}
+	defer m.leave()
 	if at < 0 {
 		return nil, invalidf("append: negative expected length %d", at)
 	}
-	return m.apply(ctx, id, func(s *Session) error {
-		if len(s.Messages) != at {
+	owned, err := m.cloneMessages(messages)
+	if err != nil {
+		return nil, err
+	}
+	return m.apply(ctx, id, func(session *Session) error {
+		if len(session.Messages) != at {
 			return ErrConflict
 		}
-		for i := range messages {
-			if err := messages[i].Validate(); err != nil {
-				return invalidf("append message %d: %v", i, err)
-			}
-			s.Messages = append(s.Messages, messages[i].Clone())
-		}
+		session.Messages = append(session.Messages, owned...)
 		return nil
 	})
 }
 
-// Delete removes the session, sharing the serialization boundary with all
-// other operations on the same ID.
+func (m *Manager) cloneMessages(messages []models.Message) ([]models.Message, error) {
+	if len(messages) == 0 {
+		return nil, invalidf("append: at least one message is required")
+	}
+	owned := make([]models.Message, len(messages))
+	for index := range messages {
+		if err := messages[index].Validate(); err != nil {
+			return nil, invalidf("append message %d: %v", index, err)
+		}
+		size, err := sessionwire.MessageFragmentSize(messages[index])
+		if err != nil {
+			return nil, invalidf("append message %d projection: %v", index, err)
+		}
+		if size > m.limits.MaxSessionMessageJSONBytes {
+			return nil, fmt.Errorf("%w: append message %d exceeds %d JSON bytes", ErrRecordTooLarge, index, m.limits.MaxSessionMessageJSONBytes)
+		}
+		owned[index] = messages[index].Clone()
+	}
+	return owned, nil
+}
+
+// Delete serializes removal with writes to the same ID.
 func (m *Manager) Delete(ctx context.Context, id string) error {
+	if err := m.enter(ctx); err != nil {
+		return err
+	}
+	defer m.leave()
 	if !validID(id) {
 		return invalidf("delete: invalid ID %q", id)
 	}
-	release := m.lock(id)
+	release, err := m.acquire(ctx, id)
+	if err != nil {
+		return err
+	}
 	defer release()
 	return m.store.Delete(ctx, id)
 }

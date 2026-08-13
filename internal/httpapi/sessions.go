@@ -1,270 +1,297 @@
 package httpapi
 
 import (
-	"encoding/json"
+	"bytes"
 	"errors"
-	"io"
 	"net/http"
-	"sort"
-	"strings"
-	"time"
 
-	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
-// metaKeyTitle is the sessions.Metadata key projected as the HTTP/UI title field.
 const metaKeyTitle = "title"
 
-type sessionSummary struct {
-	ID           string `json:"id"`
-	Title        string `json:"title,omitempty"`
-	CWD          string `json:"cwd"`
-	ParentID     string `json:"parent_id,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	MessageCount int    `json:"message_count"`
-	Preview      string `json:"preview,omitempty"`
-}
-
-type sessionDetail struct {
-	sessionSummary
-	Messages []messageDTO `json:"messages"`
-}
-
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if rejectQuery(r) != nil || s.rejectBody(w, r) {
+		if r.URL.RawQuery != "" {
+			writeAPIError(w, http.StatusBadRequest, "query_not_allowed")
+		}
+		return
+	}
+	s.writeJSONValue(w, http.StatusOK, map[string]bool{"ok": true}, 1<<10)
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	all, err := s.mgr.List(r.Context())
+	if s.rejectBody(w, r) {
+		return
+	}
+	token, present, limit, err := parsePageQuery(r, "after")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	after := ""
+	if present {
+		after, err = s.cursors.decodeList(token)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, cursorMessage(err))
+			return
+		}
+	}
+	if !tryPermit(s.encodePermits) {
+		w.Header().Set("Retry-After", "1")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
+	defer releasePermit(s.encodePermits)
+	summaries, nextAfter, err := s.mgr.ListSummariesPage(r.Context(), after, limit)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].UpdatedAt.After(all[j].UpdatedAt)
-	})
-	out := make([]sessionSummary, 0, len(all))
-	for _, sess := range all {
-		sum, err := toSummary(sess)
-		if err != nil {
-			writeErr(w, err)
+	var buffer bytes.Buffer
+	buffer.WriteByte('[')
+	lastAdvanced := after
+	for index, summary := range summaries {
+		encoded, encodeErr := encodeNoHTML(summaryFromProjection(summary), maxListResponseBytes)
+		if encodeErr != nil || len(encoded)+buffer.Len()+1 > maxListResponseBytes {
+			nextAfter = lastAdvanced
+			break
+		}
+		if index > 0 {
+			buffer.WriteByte(',')
+		}
+		buffer.Write(encoded)
+		lastAdvanced = summary.ID
+	}
+	buffer.WriteByte(']')
+	if nextAfter != "" {
+		cursor, cursorErr := s.cursors.encodeList(nextAfter)
+		if cursorErr != nil {
+			writeAPIError(w, http.StatusInternalServerError, "cursor_error")
 			return
 		}
-		out = append(out, sum)
+		w.Header().Set("X-Serpe-Next-Cursor", cursor)
 	}
-	writeJSON(w, http.StatusOK, out)
+	s.writeJSONBytes(w, http.StatusOK, buffer.Bytes())
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		CWD   string `json:"cwd"`
-		Title string `json:"title"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "query_not_allowed")
 		return
 	}
-	cwd := strings.TrimSpace(body.CWD)
-	if cwd == "" {
-		cwd = s.cwd
+	body, ok := s.readJSONObject(w, r, mutationBodyLimit, false)
+	if !ok {
+		return
 	}
-	sess := sessions.New(s.newID(), cwd)
-	if body.Title != "" {
-		sess.Metadata = withTitle(nil, body.Title)
+	if requireFields(body, "cwd", "title") != nil {
+		writeAPIError(w, http.StatusBadRequest, "unknown_field")
+		return
 	}
-	created, err := s.mgr.Create(r.Context(), sess)
+	cwdValue, cwdPresent, err := optionalString(body, "cwd")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_cwd")
+		return
+	}
+	cwd, err := s.normalizeWorkingDir(r.Context(), cwdValue, cwdPresent)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_cwd")
+		return
+	}
+	title, titlePresent, err := optionalString(body, "title")
+	if err != nil || titlePresent && !validTitle(title) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_title")
+		return
+	}
+	if !tryPermit(s.encodePermits) {
+		w.Header().Set("Retry-After", "1")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
+	defer releasePermit(s.encodePermits)
+	var created *sessions.Session
+	for attempt := 0; attempt < 4; attempt++ {
+		id, idErr := s.generatedID()
+		if idErr != nil {
+			writeAPIError(w, http.StatusInternalServerError, "id_generation_failed")
+			return
+		}
+		candidate := sessions.New(id, cwd)
+		if titlePresent && title != "" {
+			candidate.Metadata = map[string]string{metaKeyTitle: title}
+		}
+		created, err = s.mgr.Create(r.Context(), candidate)
+		if !errors.Is(err, sessions.ErrAlreadyExists) {
+			break
+		}
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	detail, err := toDetail(created)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, detail)
+	s.writeDetail(w, http.StatusCreated, created, "", false, 100, true)
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sess, err := s.mgr.Get(r.Context(), id)
+	if !validRouteID(id) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_session_id")
+		return
+	}
+	if s.rejectBody(w, r) {
+		return
+	}
+	cursor, present, limit, err := parsePageQuery(r, "before")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_query")
+		return
+	}
+	if !tryPermit(s.encodePermits) {
+		w.Header().Set("Retry-After", "1")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
+	defer releasePermit(s.encodePermits)
+	session, err := s.mgr.Get(r.Context(), id)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	detail, err := toDetail(sess)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, detail)
+	s.writeDetail(w, http.StatusOK, session, cursor, present, limit, false)
 }
 
 func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var body struct {
-		Title *string `json:"title"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !validRouteID(id) || rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	changes := make(map[string]*string)
-	if body.Title != nil {
-		if *body.Title == "" {
-			changes[metaKeyTitle] = nil
-		} else {
-			changes[metaKeyTitle] = body.Title
+	body, ok := s.readJSONObject(w, r, mutationBodyLimit, false)
+	if !ok {
+		return
+	}
+	if requireFields(body, "cwd", "title") != nil {
+		writeAPIError(w, http.StatusBadRequest, "unknown_field")
+		return
+	}
+	patch := sessions.SessionPatch{}
+	title, titlePresent, err := optionalString(body, "title")
+	if err != nil || titlePresent && !validTitle(title) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_title")
+		return
+	}
+	if titlePresent {
+		patch.Metadata = map[string]*string{metaKeyTitle: &title}
+		if title == "" {
+			patch.Metadata[metaKeyTitle] = nil
 		}
 	}
-	updated, err := s.mgr.PatchMetadata(r.Context(), id, changes)
+	cwdValue, cwdPresent, err := optionalString(body, "cwd")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_cwd")
+		return
+	}
+	if cwdPresent {
+		cwd, cwdErr := s.normalizeWorkingDir(r.Context(), cwdValue, true)
+		if cwdErr != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_cwd")
+			return
+		}
+		patch.CWD = &cwd
+	}
+	if !tryPermit(s.encodePermits) {
+		w.Header().Set("Retry-After", "1")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
+	defer releasePermit(s.encodePermits)
+	updated, err := s.mgr.Patch(r.Context(), id, patch)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	detail, err := toDetail(updated)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, detail)
+	s.writeDetail(w, http.StatusOK, updated, "", false, 100, true)
 }
 
 func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var body struct {
-		NewID string `json:"new_id"`
+	if !validRouteID(id) || rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request")
+		return
 	}
-	_ = decodeJSON(r, &body) // empty body is fine
-	newID := strings.TrimSpace(body.NewID)
-	if newID == "" {
-		newID = s.newID()
+	body, ok := s.readJSONObject(w, r, mutationBodyLimit, true)
+	if !ok {
+		return
 	}
-	forked, err := s.mgr.Fork(r.Context(), id, newID)
+	if requireFields(body, "new_id") != nil {
+		writeAPIError(w, http.StatusBadRequest, "unknown_field")
+		return
+	}
+	newID, explicit, err := optionalString(body, "new_id")
+	if err != nil || explicit && !sessions.ValidID(newID) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_session_id")
+		return
+	}
+	if !tryPermit(s.encodePermits) {
+		w.Header().Set("Retry-After", "1")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
+	defer releasePermit(s.encodePermits)
+	var forked *sessions.Session
+	for attempt := 0; attempt < 4; attempt++ {
+		if !explicit {
+			newID, err = s.generatedID()
+			if err != nil {
+				writeAPIError(w, http.StatusInternalServerError, "id_generation_failed")
+				return
+			}
+		}
+		forked, err = s.mgr.Fork(r.Context(), id, newID)
+		if explicit || !errors.Is(err, sessions.ErrAlreadyExists) {
+			break
+		}
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	detail, err := toDetail(forked)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, detail)
+	s.writeDetail(w, http.StatusCreated, forked, "", false, 100, true)
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !validRouteID(id) || rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if s.rejectBody(w, r) {
+		return
+	}
 	if err := s.mgr.Delete(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func sessionTitle(meta map[string]string) string {
-	if meta == nil {
-		return ""
-	}
-	return meta[metaKeyTitle]
-}
-
-func withTitle(meta map[string]string, title string) map[string]string {
-	out := cloneMetadata(meta)
-	out[metaKeyTitle] = title
-	return out
-}
-
-func cloneMetadata(meta map[string]string) map[string]string {
-	out := map[string]string{}
-	for k, v := range meta {
-		out[k] = v
-	}
-	return out
-}
-
-func toSummary(s *sessions.Session) (sessionSummary, error) {
-	if s == nil {
-		return sessionSummary{}, errors.New("session is nil")
-	}
-	return sessionSummary{
-		ID:           s.ID,
-		Title:        sessionTitle(s.Metadata),
-		CWD:          s.CWD,
-		ParentID:     s.ParentID,
-		CreatedAt:    s.CreatedAt.UTC().Format(time.RFC3339Nano),
-		UpdatedAt:    s.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		MessageCount: len(s.Messages),
-		Preview:      previewText(s),
-	}, nil
-}
-
-func toDetail(s *sessions.Session) (sessionDetail, error) {
-	sum, err := toSummary(s)
-	if err != nil {
-		return sessionDetail{}, err
-	}
-	msgs, err := messagesToDTO(s.Messages)
-	if err != nil {
-		return sessionDetail{}, err
-	}
-	return sessionDetail{
-		sessionSummary: sum,
-		Messages:       msgs,
-	}, nil
-}
-
-func previewText(s *sessions.Session) string {
-	for _, m := range s.Messages {
-		if m.Role != models.RoleUser {
-			continue
-		}
-		for _, c := range m.Content {
-			if c.Kind == models.ContentText && c.Text != nil && c.Text.Text != "" {
-				t := c.Text.Text
-				if len(t) > 80 {
-					return t[:80] + "…"
-				}
-				return t
-			}
-		}
-	}
-	return ""
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	if r.Body == nil {
-		return nil
-	}
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(dst); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, sessions.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-	case errors.Is(err, sessions.ErrAlreadyExists):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-	case errors.Is(err, sessions.ErrConflict):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeAPIError(w, http.StatusNotFound, "not_found")
+	case errors.Is(err, sessions.ErrAlreadyExists), errors.Is(err, sessions.ErrConflict):
+		writeAPIError(w, http.StatusConflict, "conflict")
 	case errors.Is(err, sessions.ErrInvalidSession):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAPIError(w, http.StatusBadRequest, "invalid_session")
+	case errors.Is(err, sessions.ErrRecordTooLarge):
+		writeAPIError(w, http.StatusRequestEntityTooLarge, "record_too_large")
+	case errors.Is(err, sessions.ErrClosed):
+		writeAPIError(w, http.StatusServiceUnavailable, "store_closed")
+	case errors.Is(err, sessions.ErrCommitUncertain):
+		writeAPIError(w, http.StatusServiceUnavailable, "commit_uncertain")
 	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAPIError(w, http.StatusInternalServerError, "internal_error")
 	}
 }

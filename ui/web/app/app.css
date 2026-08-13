@@ -54,6 +54,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -68,6 +69,7 @@ button:disabled {
 
 button:focus-visible,
 a:focus-visible,
+input:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--accent);
@@ -191,6 +193,22 @@ summary:focus-visible {
   color: var(--warning);
   font-size: 0.72rem;
   line-height: 1.45;
+}
+
+.lock-button {
+  margin-top: 0.8rem;
+  border: 0;
+  background: transparent;
+  padding: 0.3rem 0.25rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 640;
+  text-decoration: underline;
+  text-underline-offset: 0.18rem;
+}
+
+.lock-button:hover {
+  color: var(--accent-ink);
 }
 
 .session-nav {
@@ -409,6 +427,40 @@ summary:focus-visible {
   scrollbar-color: var(--line-strong) transparent;
 }
 
+.history-control {
+  width: 100%;
+  max-width: 50rem;
+  margin: 0 auto 1.35rem;
+  text-align: center;
+}
+
+.load-older-button {
+  min-height: 2.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  padding: 0.48rem 0.82rem;
+  color: var(--accent-ink);
+  font-size: 0.76rem;
+  font-weight: 670;
+}
+
+.load-older-button:hover:not(:disabled) {
+  border-color: #91afa7;
+  background: var(--accent-soft);
+}
+
+.load-older-button:disabled {
+  color: var(--muted);
+}
+
+.history-error {
+  margin: 0.55rem auto 0;
+  color: var(--danger);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
 .message-list {
   display: flex;
   width: 100%;
@@ -535,6 +587,17 @@ summary:focus-visible {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.64rem;
+}
+
+.content-text {
+  min-width: 0;
+  margin: 0 0 0.82rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.content-text:last-child {
+  margin-bottom: 0;
 }
 
 .content-markdown {
@@ -726,12 +789,17 @@ summary:focus-visible {
 
 .tool-name,
 .result-name {
+  min-width: 0;
   overflow: hidden;
   color: #48396a;
   font-family: var(--font-mono);
   font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-name {
+  flex: 1 1 auto;
 }
 
 .tool-status,
@@ -828,6 +896,12 @@ summary:focus-visible {
   border-radius: 0.85rem;
   box-shadow: var(--shadow-float);
   object-fit: contain;
+}
+
+.image-unavailable {
+  margin: 0.5rem 0;
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .error-banner {
@@ -970,6 +1044,109 @@ summary:focus-visible {
   justify-content: center;
   padding: 2rem;
   text-align: center;
+}
+
+.token-gate {
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  background: var(--canvas);
+  padding: 2rem 1rem;
+}
+
+.token-panel {
+  width: min(100%, 28rem);
+  border-radius: 1rem;
+  background: var(--surface);
+  padding: clamp(1.4rem, 5vw, 2.4rem);
+  box-shadow: var(--shadow-float);
+}
+
+.token-mark {
+  width: 2.6rem;
+  height: 2.6rem;
+}
+
+.token-panel h1 {
+  margin: 1.15rem 0 0;
+  color: var(--ink-strong);
+  font-size: clamp(1.45rem, 5vw, 2rem);
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.token-panel > p {
+  margin: 0.7rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+
+.token-panel form {
+  margin-top: 1.5rem;
+}
+
+.token-panel label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: var(--ink-strong);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.token-panel input {
+  width: 100%;
+  min-height: 2.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.75rem;
+  background: var(--surface-subtle);
+  padding: 0.62rem 0.72rem;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.token-panel input:focus {
+  border-color: #70a79f;
+  outline: 0;
+  box-shadow: var(--focus);
+}
+
+.token-memory,
+.token-problem {
+  margin: 0.55rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.token-memory {
+  color: var(--muted);
+}
+
+.token-problem {
+  color: var(--danger);
+}
+
+.token-submit {
+  width: 100%;
+  min-height: 2.85rem;
+  margin-top: 1.15rem;
+  border: 0;
+  border-radius: 0.75rem;
+  background: var(--accent);
+  color: #f8fffd;
+  font-size: 0.84rem;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgb(7 85 78 / 16%);
+}
+
+.token-submit:hover {
+  background: var(--accent-strong);
 }
 
 .empty-state-inner,

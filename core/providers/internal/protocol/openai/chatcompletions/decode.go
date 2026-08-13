@@ -3,6 +3,7 @@ package chatcompletions
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/h2cone/serpe/core/models"
@@ -10,7 +11,7 @@ import (
 	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
-func decodeResponse(wire chatResponse, requestID string) (*models.Response, error) {
+func decodeResponse(wire chatResponse, requestID string, guard *shared.ToolCallGuard) (*models.Response, error) {
 	if wire.Error != nil {
 		return nil, normalizeWireError(wire.Error, "generate", requestID)
 	}
@@ -18,13 +19,13 @@ func decodeResponse(wire chatResponse, requestID string) (*models.Response, erro
 	if wire.Created != 0 {
 		response.CreatedAt = time.Unix(wire.Created, 0).UTC()
 	}
-	for _, choice := range wire.Choices {
+	for choicePosition, choice := range wire.Choices {
 		candidate := models.Candidate{Index: choice.Index, FinishReason: models.FinishUnknown}
 		if choice.FinishReason != nil {
 			candidate.RawFinishReason = *choice.FinishReason
 			candidate.FinishReason = mapFinish(*choice.FinishReason)
 		}
-		content, err := decodeMessage(choice.Message)
+		content, err := decodeMessage(choice.Message, guard, choicePosition)
 		if err != nil {
 			return nil, err
 		}
@@ -37,7 +38,7 @@ func decodeResponse(wire chatResponse, requestID string) (*models.Response, erro
 	return response, nil
 }
 
-func decodeMessage(message chatResponseMessage) ([]models.Content, error) {
+func decodeMessage(message chatResponseMessage, guard *shared.ToolCallGuard, choice int) ([]models.Content, error) {
 	content, err := decodeTextContent(message.Content)
 	if err != nil {
 		return nil, err
@@ -45,13 +46,20 @@ func decodeMessage(message chatResponseMessage) ([]models.Content, error) {
 	if message.Refusal != nil && *message.Refusal != "" {
 		content = append(content, models.Refusal(*message.Refusal))
 	}
-	for _, call := range message.ToolCalls {
+	for index, call := range message.ToolCalls {
 		arguments := json.RawMessage(call.Function.Arguments)
 		if len(arguments) == 0 {
 			arguments = json.RawMessage("{}")
 		}
 		if !shared.JSONObject(arguments) {
 			return nil, protocolError("tool call arguments are not a JSON object", nil)
+		}
+		key := fmt.Sprintf("%d/%d", choice, index)
+		if err := guard.Start(key, call.ID, call.Function.Name); err != nil {
+			return nil, protocolResponseLimit(err)
+		}
+		if err := guard.AddArguments(key, len(arguments)); err != nil {
+			return nil, protocolResponseLimit(err)
 		}
 		content = append(content, models.ToolCallContent(call.ID, call.Function.Name, arguments))
 	}
@@ -63,9 +71,20 @@ func decodeMessage(message chatResponseMessage) ([]models.Content, error) {
 		if !shared.JSONObject(arguments) {
 			return nil, protocolError("deprecated function_call arguments are not a JSON object", nil)
 		}
+		key := fmt.Sprintf("%d/legacy", choice)
+		if err := guard.Start(key, "", message.FunctionCall.Name); err != nil {
+			return nil, protocolResponseLimit(err)
+		}
+		if err := guard.AddArguments(key, len(arguments)); err != nil {
+			return nil, protocolResponseLimit(err)
+		}
 		content = append(content, models.ToolCallContent("", message.FunctionCall.Name, arguments))
 	}
 	return content, nil
+}
+
+func protocolResponseLimit(cause error) error {
+	return &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "generate", Code: "response_limit", Message: "Chat Completions tool-call response exceeds configured limit", Cause: cause}
 }
 
 func decodeTextContent(raw json.RawMessage) ([]models.Content, error) {

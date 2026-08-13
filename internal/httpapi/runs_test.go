@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
@@ -20,7 +20,7 @@ func TestRunSSESuccess(t *testing.T) {
 	model := &scriptedModel{responses: []*models.Response{textResponse("hi there")}}
 	srv, mgr := newTestServer(t, model, nil, func() string { return "s1" })
 
-	created, err := mgr.Create(context.Background(), sessions.New("s1", "/tmp"))
+	created, err := mgr.Create(context.Background(), sessions.New("s1", t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,9 +28,10 @@ func TestRunSSESuccess(t *testing.T) {
 		t.Fatalf("pre-run messages=%d", len(created.Messages))
 	}
 
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"s1","prompt":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.Handler().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
@@ -84,13 +85,14 @@ func TestRunSSEFailureNoPersist(t *testing.T) {
 		errs:      []error{&models.Error{Kind: models.ErrorProtocol, Operation: "stream", Message: "boom"}},
 	}
 	srv, mgr := newTestServer(t, model, nil, func() string { return "s1" })
-	if _, err := mgr.Create(context.Background(), sessions.New("s1", "/tmp")); err != nil {
+	if _, err := mgr.Create(context.Background(), sessions.New("s1", t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
 
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"s1","prompt":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.Handler().ServeHTTP(rr, req)
 
 	got, err := mgr.Get(context.Background(), "s1")
@@ -106,9 +108,10 @@ func TestRunSSEFailureNoPersist(t *testing.T) {
 func TestRunMissingSession(t *testing.T) {
 	store := &loadCountingStore{Store: sessions.NewMemoryStore()}
 	srv, _ := newTestServerWithStore(t, nil, nil, nil, store)
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"nope","prompt":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
@@ -132,14 +135,15 @@ func TestRunLoadsSessionOnceBeforeOpeningModelStream(t *testing.T) {
 		},
 	}
 	srv, mgr := newTestServerWithStore(t, model, nil, nil, store)
-	if _, err := mgr.Create(context.Background(), sessions.New("s1", "/tmp")); err != nil {
+	if _, err := mgr.Create(context.Background(), sessions.New("s1", t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
 	store.loads.Store(0)
 
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"s1","prompt":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
@@ -171,14 +175,16 @@ func TestRunWithTool(t *testing.T) {
 		toolCallResponse(models.ToolCall{ID: "call_1", Name: "now", Arguments: []byte(`{}`)}),
 		textResponse("It is noon."),
 	}}
-	srv, mgr := newTestServer(t, model, []runtime.Tool{nowTool{}}, func() string { return "s1" })
-	if _, err := mgr.Create(context.Background(), sessions.New("s1", "/tmp")); err != nil {
+	srv, mgr := newTestServer(t, model, mustExec(t, nowTool{}), func() string { return "s1" })
+	if _, err := mgr.Create(context.Background(), sessions.New("s1", t.TempDir())); err != nil {
 		t.Fatal(err)
 	}
 
-	rr := httptest.NewRecorder()
+	rr := newRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"s1","prompt":"what time?"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testBearerToken)
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
@@ -188,6 +194,19 @@ func TestRunWithTool(t *testing.T) {
 	kinds := frameKinds(frames)
 	if !containsSeq(kinds, "tool_start", "tool_end", "run_end", "done") {
 		t.Fatalf("frame kinds=%v", kinds)
+	}
+	start := firstOfKind(frames, "tool_start")
+	end := firstOfKind(frames, "tool_end")
+	if start == nil || end == nil {
+		t.Fatalf("missing tool frames: %v", frames)
+	}
+	if int(start["idx"].(float64)) != 0 || int(end["idx"].(float64)) != 0 {
+		t.Fatalf("tool idx start=%v end=%v", start["idx"], end["idx"])
+	}
+	// Current serial contract: start is immediately followed by that call's end.
+	startAt := indexOfKind(kinds, "tool_start")
+	if startAt < 0 || startAt+1 >= len(kinds) || kinds[startAt+1] != "tool_end" {
+		t.Fatalf("expected adjacent tool_start/tool_end, kinds=%v", kinds)
 	}
 	if countKind(kinds, "run_end") != 1 || countKind(kinds, "done") != 1 {
 		t.Fatalf("kinds=%v", kinds)
@@ -274,4 +293,65 @@ func lastOfKind(frames []map[string]any, kind string) map[string]any {
 		}
 	}
 	return last
+}
+
+func firstOfKind(frames []map[string]any, kind string) map[string]any {
+	for _, f := range frames {
+		if f["t"] == kind {
+			return f
+		}
+	}
+	return nil
+}
+
+func indexOfKind(kinds []string, kind string) int {
+	for i, k := range kinds {
+		if k == kind {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestRunWithTwoToolsAssertsIndex(t *testing.T) {
+	model := &scriptedModel{responses: []*models.Response{
+		toolCallResponse(
+			models.ToolCall{ID: "c0", Name: "now", Arguments: []byte(`{}`)},
+			models.ToolCall{ID: "c1", Name: "now", Arguments: []byte(`{}`)}),
+		textResponse("ok"),
+	}}
+	srv, mgr := newTestServer(t, model, mustExec(t, nowTool{}), func() string { return "s1" })
+	if _, err := mgr.Create(context.Background(), sessions.New("s1", t.TempDir())); err != nil {
+		t.Fatal(err)
+	}
+	rr := newRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs",
+		bytes.NewBufferString(`{"session_id":"s1","prompt":"go"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testBearerToken)
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	frames := parseSSEFrames(t, rr.Body.String())
+	kinds := frameKinds(frames)
+	var starts, ends []int
+	for _, f := range frames {
+		kind, _ := f["t"].(string)
+		if kind != "tool_start" && kind != "tool_end" {
+			continue
+		}
+		if kind == "tool_start" {
+			starts = append(starts, int(f["idx"].(float64)))
+		} else {
+			ends = append(ends, int(f["idx"].(float64)))
+		}
+	}
+	if !slices.Equal(starts, []int{0, 1}) {
+		t.Fatalf("tool starts=%v kinds=%v", starts, kinds)
+	}
+	slices.Sort(ends)
+	if !slices.Equal(ends, []int{0, 1}) {
+		t.Fatalf("tool ends=%v", ends)
+	}
 }

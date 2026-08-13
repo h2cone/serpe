@@ -25,11 +25,19 @@ func ProtocolCapabilities() models.CapabilitySet { return capabilities }
 
 // DecodeResponseJSON decodes a full Chat Completions JSON body.
 func DecodeResponseJSON(data []byte, requestID string) (*models.Response, error) {
+	return DecodeResponseJSONWithLimits(data, requestID, shared.DefaultToolCallLimits())
+}
+
+// DecodeResponseJSONWithLimits decodes with provider/run tool-call ceilings.
+func DecodeResponseJSONWithLimits(data []byte, requestID string, limits shared.ToolCallLimits) (*models.Response, error) {
+	if err := shared.ValidateUnaryJSON(data); err != nil {
+		return nil, protocolError("response is not strict JSON", err)
+	}
 	var wire chatResponse
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return nil, protocolError("response is not valid Chat Completions JSON", err)
 	}
-	return decodeResponse(wire, requestID)
+	return decodeResponse(wire, requestID, shared.NewToolCallGuard(limits))
 }
 
 // RejectProviderState enforces that Chat Completions has no resumable state.

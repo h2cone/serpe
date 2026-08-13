@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/runtime/loops"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
@@ -17,8 +17,9 @@ var ErrConcurrentTurn = sessions.ErrConflict
 
 // Config constructs a TurnService.
 type Config struct {
-	Runner  *runtime.Runner
-	Manager *sessions.Manager
+	Runner         *loops.Runner
+	Manager        *sessions.Manager
+	BindWorkingDir func(context.Context, string) (context.Context, error)
 }
 
 // TurnService runs one conversational turn against a session: load history,
@@ -28,8 +29,9 @@ type Config struct {
 // CAS-append). Callers see Send/Stream only; commit policy and CAS length
 // stay inside the package.
 type TurnService struct {
-	runner *runtime.Runner
+	runner *loops.Runner
 	mgr    *sessions.Manager
+	bind   func(context.Context, string) (context.Context, error)
 }
 
 // New validates config and returns a TurnService.
@@ -40,18 +42,30 @@ func New(cfg Config) (*TurnService, error) {
 	if cfg.Manager == nil {
 		return nil, fmt.Errorf("compose: manager is required")
 	}
-	return &TurnService{runner: cfg.Runner, mgr: cfg.Manager}, nil
+	if cfg.Runner.Limits().MaxSessionMessageJSONBytes > cfg.Manager.Limits().MaxSessionMessageJSONBytes {
+		return nil, fmt.Errorf("compose: runner session-message limit %d exceeds manager limit %d",
+			cfg.Runner.Limits().MaxSessionMessageJSONBytes, cfg.Manager.Limits().MaxSessionMessageJSONBytes)
+	}
+	bind := cfg.BindWorkingDir
+	if bind == nil {
+		bind = func(ctx context.Context, _ string) (context.Context, error) { return ctx, nil }
+	}
+	return &TurnService{runner: cfg.Runner, mgr: cfg.Manager, bind: bind}, nil
 }
 
 // Send runs a blocking turn. On success it returns the run result and the
 // committed session snapshot. See package doc for commit policy and return
 // shapes on failure paths.
-func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*runtime.Result, *sessions.Session, error) {
+func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*loops.Result, *sessions.Session, error) {
 	tx, err := s.begin(ctx, sessionID, prompt)
 	if err != nil {
 		return nil, nil, err
 	}
-	result, err := s.runner.Run(ctx, tx.req)
+	runCtx, err := s.bind(ctx, tx.cwd)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := s.runner.Run(runCtx, tx.req)
 	if err != nil {
 		// Request validation / construction failure: no partial result.
 		// Fatal/cancel after start: partial result, no commit.
@@ -65,7 +79,7 @@ func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*runt
 }
 
 // Stream starts a streaming turn. The returned Turn wraps the inner
-// runtime.Stream and runs the same commit transaction once before publishing a
+// loops.Stream and runs the same commit transaction once before publishing a
 // terminal run_end event. As a fallback for streams that end without run_end,
 // it also finalizes on natural exhaustion. Close does not commit.
 //
@@ -82,7 +96,11 @@ func (s *TurnService) Stream(ctx context.Context, sessionID, prompt string) (*Tu
 	if err != nil {
 		return nil, err
 	}
-	inner, err := s.runner.Stream(ctx, tx.req)
+	runCtx, err := s.bind(ctx, tx.cwd)
+	if err != nil {
+		return nil, err
+	}
+	inner, err := s.runner.Stream(runCtx, tx.req)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +118,7 @@ type turnTxn struct {
 	svc *TurnService
 	id  string
 	pre int
+	cwd string
 	req *models.Request
 }
 
@@ -112,11 +131,12 @@ func (s *TurnService) begin(ctx context.Context, sessionID, prompt string) (*tur
 		svc: s,
 		id:  sessionID,
 		pre: len(session.Messages),
+		cwd: session.CWD,
 		req: projectRequest(session, prompt),
 	}, nil
 }
 
-func (tx *turnTxn) commit(ctx context.Context, result *runtime.Result) (*sessions.Session, error) {
+func (tx *turnTxn) commit(ctx context.Context, result *loops.Result) (*sessions.Session, error) {
 	suffix, err := suffixToCommit(result, tx.pre)
 	if err != nil {
 		return nil, err
@@ -127,14 +147,14 @@ func (tx *turnTxn) commit(ctx context.Context, result *runtime.Result) (*session
 	return tx.svc.mgr.AppendAt(ctx, tx.id, tx.pre, suffix...)
 }
 
-// Turn decorates runtime.Stream with session commit at its terminal boundary.
-// One Turn has one drain loop (same single-reader rule as runtime.Stream).
+// Turn decorates loops.Stream with session commit at its terminal boundary.
+// One Turn has one drain loop (same single-reader rule as loops.Stream).
 //
 // Prefer Err() once run_end is observed (or after drain) for the singular
 // outcome. CommitErr is a diagnostic side-channel only (when both inner and
 // commit fail, Err prefers the inner error).
 type Turn struct {
-	inner runtime.Stream
+	inner loops.Stream
 	tx    *turnTxn
 	ctx   context.Context
 
@@ -150,7 +170,7 @@ type Turn struct {
 // implementations that do not emit run_end.
 func (t *Turn) Next() bool {
 	if t.inner.Next() {
-		if t.inner.Event().Kind == runtime.EventRunEnd {
+		if t.inner.Event().Kind == loops.EventRunEnd {
 			t.finish()
 		}
 		return true
@@ -196,7 +216,7 @@ func streamCommitContext(ctx context.Context) context.Context {
 }
 
 // Event returns the current inner event.
-func (t *Turn) Event() runtime.Event { return t.inner.Event() }
+func (t *Turn) Event() loops.Event { return t.inner.Event() }
 
 // Err returns the terminal turn error: the inner stream error if any,
 // otherwise a commit failure. Once run_end is observed or Next returns false,
@@ -212,7 +232,7 @@ func (t *Turn) Err() error {
 }
 
 // Result returns the inner run result snapshot.
-func (t *Turn) Result() *runtime.Result { return t.inner.Result() }
+func (t *Turn) Result() *loops.Result { return t.inner.Result() }
 
 // Close closes the inner stream without committing.
 func (t *Turn) Close() error { return t.inner.Close() }
@@ -238,7 +258,7 @@ func (t *Turn) CommitErr() error {
 // suffixToCommit returns the transcript suffix to persist, or (nil, nil) when
 // the run did not complete successfully. A completed run with a short
 // transcript is an invariant violation.
-func suffixToCommit(result *runtime.Result, pre int) ([]models.Message, error) {
+func suffixToCommit(result *loops.Result, pre int) ([]models.Message, error) {
 	if result == nil || !result.Completed() {
 		return nil, nil
 	}

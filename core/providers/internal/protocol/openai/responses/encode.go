@@ -83,7 +83,7 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) ([]js
 				return nil, invalidState("Responses provider state contains an unsupported output item", nil)
 			}
 		}
-		projected, decodeErr := decodeResponse(responseWire{Status: "completed", Output: items}, "", stateLimit)
+		projected, decodeErr := decodeResponse(responseWire{Status: "completed", Output: items}, "", stateLimit, shared.NewToolCallGuard(shared.DefaultToolCallLimits()))
 		if decodeErr != nil || len(projected.Candidates) != 1 || !shared.EquivalentContent(projected.Candidates[0].Content, message.Content) {
 			return nil, invalidState("Responses provider state does not match assistant content", decodeErr)
 		}
@@ -157,22 +157,51 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) ([]js
 				return nil, err
 			}
 			var text strings.Builder
+			hasImage := false
 			for _, child := range block.ToolResult.Content {
-				if child.Kind != models.ContentText {
-					return nil, unsupported("Responses tool results support text only")
+				switch child.Kind {
+				case models.ContentText:
+					text.WriteString(child.Text.Text)
+				case models.ContentImage:
+					hasImage = true
+				default:
+					return nil, unsupported("Responses tool results support text and image content only")
 				}
-				text.WriteString(child.Text.Text)
 			}
 			status := "completed"
 			if block.ToolResult.IsError {
 				status = "incomplete"
 			}
+			var resultOutput any = text.String()
+			if hasImage {
+				parts := make([]any, 0, len(block.ToolResult.Content))
+				for _, child := range block.ToolResult.Content {
+					switch child.Kind {
+					case models.ContentText:
+						parts = append(parts, struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+						}{Type: "input_text", Text: child.Text.Text})
+					case models.ContentImage:
+						uri := child.Image.URI
+						if uri == "" {
+							uri = "data:" + child.Image.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(child.Image.Data)
+						}
+						parts = append(parts, struct {
+							Type     string `json:"type"`
+							ImageURL string `json:"image_url"`
+							Detail   string `json:"detail,omitempty"`
+						}{Type: "input_image", ImageURL: uri, Detail: string(child.Image.Detail)})
+					}
+				}
+				resultOutput = parts
+			}
 			if err := appendJSON(&output, struct {
 				Type   string `json:"type"`
 				CallID string `json:"call_id"`
-				Output string `json:"output"`
+				Output any    `json:"output"`
 				Status string `json:"status,omitempty"`
-			}{Type: "function_call_output", CallID: block.ToolResult.CallID, Output: text.String(), Status: status}); err != nil {
+			}{Type: "function_call_output", CallID: block.ToolResult.CallID, Output: resultOutput, Status: status}); err != nil {
 				return nil, err
 			}
 		case models.ContentReasoningSummary:

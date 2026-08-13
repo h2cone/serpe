@@ -1,5 +1,5 @@
-// Command serpe assembles a provider model and runtime.Runner, then renders
-// run-level events. The model–tool loop lives in package runtime.
+// Command serpe assembles a provider model and loops.Runner, then renders
+// run-level events. The model–tool loop lives in package loops.
 package main
 
 import (
@@ -8,10 +8,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/internal/bootstrap"
+	"github.com/h2cone/serpe/runtime/loops"
 )
 
 func main() {
@@ -21,9 +22,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	runner := must(bootstrap.NewRunner(bootstrap.RunnerConfigFromEnv()))
+	cwd := must(filepath.Abs(must(os.Getwd())))
+	cfg := bootstrap.RunnerConfigFromEnv()
+	cfg.ToolProfile = bootstrap.LocalCLIProfile(cwd)
+	runner, access := must2(bootstrap.NewRunner(cfg))
+	ctx = must(access.Bind(ctx, cwd))
 
-	prompt := "What time is it?"
+	prompt := "Read README.md and summarize this repository in three bullets."
 	if len(os.Args) > 1 {
 		prompt = os.Args[1]
 	}
@@ -37,17 +42,17 @@ func main() {
 	for stream.Next() {
 		ev := stream.Event()
 		switch ev.Kind {
-		case runtime.EventModelStart:
+		case loops.EventModelStart:
 			if !sawModelStart {
 				log.Print("model_start")
 				sawModelStart = true
 			}
-		case runtime.EventModel:
+		case loops.EventModel:
 			if !sawFirstToken && ev.Model.DisplayText() != "" {
 				log.Print("first_token")
 				sawFirstToken = true
 			}
-		case runtime.EventToolStart:
+		case loops.EventToolStart:
 			if ev.ToolCall != nil {
 				log.Printf("tool %s", ev.ToolCall.Name)
 			}
@@ -65,12 +70,12 @@ func main() {
 	log.Printf("stopped: %s", result.StopReason)
 }
 
-func render(ev runtime.Event) {
+func render(ev loops.Event) {
 	switch ev.Kind {
-	case runtime.EventModel:
+	case loops.EventModel:
 		fmt.Print(ev.Model.DisplayText())
-	case runtime.EventRunEnd:
-		if ev.StopReason == runtime.StopCompleted {
+	case loops.EventRunEnd:
+		if ev.StopReason == loops.StopCompleted {
 			fmt.Println()
 		}
 	}
@@ -81,4 +86,11 @@ func must[T any](v T, err error) T {
 		log.Fatal(err)
 	}
 	return v
+}
+
+func must2[A, B any](a A, b B, err error) (A, B) {
+	if err != nil {
+		log.Fatal(err)
+	}
+	return a, b
 }

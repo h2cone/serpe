@@ -3,18 +3,27 @@ package sessions
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/h2cone/serpe/core/models"
 )
 
+func testCWD(name string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(`C:\\`, name)
+	}
+	return filepath.Join("/", name)
+}
+
 func TestValidateAcceptsMinimalSession(t *testing.T) {
-	if err := New("s1", "/work").Validate(); err != nil {
+	if err := New("s1", testCWD("work")).Validate(); err != nil {
 		t.Fatalf("minimal session rejected: %v", err)
 	}
 	// Metadata may be nil; empty transcript is legal.
-	s := New("s1", "/work")
+	s := New("s1", testCWD("work"))
 	s.Metadata = map[string]string{"title": ""} // empty value is legal
 	if err := s.Validate(); err != nil {
 		t.Fatalf("session with empty metadata value rejected: %v", err)
@@ -28,20 +37,20 @@ func TestValidateErrors(t *testing.T) {
 		s    *Session
 	}{
 		{"nil", nil},
-		{"empty ID", &Session{ID: "", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
-		{"leading space ID", &Session{ID: " s1", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
-		{"trailing space ID", &Session{ID: "s1 ", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
-		{"whitespace parent", &Session{ID: "s1", ParentID: " p", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
-		{"parent equals ID", &Session{ID: "s1", ParentID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
+		{"empty ID", &Session{ID: "", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
+		{"leading space ID", &Session{ID: " s1", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
+		{"trailing space ID", &Session{ID: "s1 ", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
+		{"whitespace parent", &Session{ID: "s1", ParentID: " p", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
+		{"parent equals ID", &Session{ID: "s1", ParentID: "s1", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
 		{"empty CWD", &Session{ID: "s1", CWD: "", CreatedAt: now, UpdatedAt: now}},
 		{"blank CWD", &Session{ID: "s1", CWD: "   ", CreatedAt: now, UpdatedAt: now}},
-		{"zero timestamps", &Session{ID: "s1", CWD: "/w"}},
-		{"updated before created", &Session{ID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now.Add(-time.Hour)}},
-		{"invalid message role", &Session{ID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now, Messages: []models.Message{{Role: "bogus"}}}},
-		{"blank metadata key", &Session{ID: "s1", CWD: "/w", CreatedAt: now, UpdatedAt: now, Metadata: map[string]string{" k": "v"}}},
-		{"path separator ID", &Session{ID: "a/b", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
-		{"windows reserved ID", &Session{ID: "CON", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
-		{"space in ID", &Session{ID: "has space", CWD: "/w", CreatedAt: now, UpdatedAt: now}},
+		{"zero timestamps", &Session{ID: "s1", CWD: testCWD("w")}},
+		{"updated before created", &Session{ID: "s1", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now.Add(-time.Hour)}},
+		{"invalid message role", &Session{ID: "s1", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now, Messages: []models.Message{{Role: "bogus"}}}},
+		{"blank metadata key", &Session{ID: "s1", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now, Metadata: map[string]string{" k": "v"}}},
+		{"path separator ID", &Session{ID: "a/b", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
+		{"windows reserved ID", &Session{ID: "CON", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
+		{"space in ID", &Session{ID: "has space", CWD: testCWD("w"), CreatedAt: now, UpdatedAt: now}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,14 +62,14 @@ func TestValidateErrors(t *testing.T) {
 }
 
 func TestNewTimestamps(t *testing.T) {
-	s := New("s1", "/work")
+	s := New("s1", testCWD("work"))
 	if !s.CreatedAt.Equal(s.UpdatedAt) {
 		t.Fatalf("CreatedAt %v != UpdatedAt %v", s.CreatedAt, s.UpdatedAt)
 	}
 	if s.CreatedAt.Location() != time.UTC {
 		t.Fatalf("New timestamp location = %v, want UTC", s.CreatedAt.Location())
 	}
-	if s.ID != "s1" || s.CWD != "/work" || s.ParentID != "" || len(s.Messages) != 0 || s.Metadata != nil {
+	if s.ID != "s1" || s.CWD != testCWD("work") || s.ParentID != "" || len(s.Messages) != 0 || s.Metadata != nil {
 		t.Fatalf("unexpected New result: %+v", s)
 	}
 }
@@ -73,7 +82,7 @@ func TestCloneDeep(t *testing.T) {
 	orig := &Session{
 		ID:        "s1",
 		ParentID:  "s0",
-		CWD:       "/wd",
+		CWD:       testCWD("wd"),
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 		Messages: []models.Message{
@@ -96,7 +105,7 @@ func TestCloneDeep(t *testing.T) {
 		t.Fatalf("clone is invalid: %v", err)
 	}
 	// Mutate the original at every depth.
-	orig.CWD = "/other"
+	orig.CWD = testCWD("other")
 	orig.Metadata["title"] = "mutated"
 	orig.Messages[0].Content[1].Image.Data[0] = 99
 	orig.Messages[1].Content[0].ToolCall.Arguments[0] = 'X'
@@ -105,7 +114,7 @@ func TestCloneDeep(t *testing.T) {
 	orig.Messages[1].Content[3].Refusal.Text = "mutated"
 	orig.Messages[1].ProviderState.Data[0] = 'X'
 
-	if clone.CWD != "/wd" || clone.Metadata["title"] != "t" {
+	if clone.CWD != testCWD("wd") || clone.Metadata["title"] != "t" {
 		t.Fatal("Clone shares scalar or metadata storage")
 	}
 	if clone.Messages[0].Content[1].Image.Data[0] != 1 {

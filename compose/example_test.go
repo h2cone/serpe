@@ -4,30 +4,36 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/compose"
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/runtime/loops"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // Example demonstrates create session → Send → assert committed suffix.
 func Example() {
 	model := &scriptedModel{responses: []*models.Response{textResponse("Let me look.")}}
-	runner, err := runtime.NewRunner(runtime.Config{Model: model})
+	runner, err := loops.New(loops.Config{Model: model})
 	if err != nil {
 		log.Fatal(err)
 	}
-	mgr, err := sessions.NewManager(sessions.NewMemoryStore())
+	mgr, err := sessions.NewManager(sessions.NewMemoryStore(), sessions.Limits{})
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer func() { _ = mgr.Close() }()
 	svc, err := compose.New(compose.Config{Runner: runner, Manager: mgr})
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := mgr.Create(ctx, sessions.New("sess-1", "/work")); err != nil {
+	cwd, err := filepath.Abs("work")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, sessions.New("sess-1", cwd)); err != nil {
 		log.Fatal(err)
 	}
 

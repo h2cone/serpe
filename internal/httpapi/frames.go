@@ -1,8 +1,8 @@
 package httpapi
 
 import (
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/runtime/loops"
 )
 
 // SSE wire frames are bound to the UI runtime decoder through the shared
@@ -84,15 +84,15 @@ type frameDone struct {
 }
 
 // mapEvent converts an agent event into a typed SSE frame, or nil to drop.
-func mapEvent(ev runtime.Event) any {
+func mapEvent(ev loops.Event) any {
 	switch ev.Kind {
-	case runtime.EventRunStart:
+	case loops.EventRunStart:
 		return frameRunStart{T: "run_start"}
-	case runtime.EventModelStart:
+	case loops.EventModelStart:
 		return frameModelStart{T: "model_start", Turn: ev.ModelTurn}
-	case runtime.EventModel:
+	case loops.EventModel:
 		return mapModelEvent(ev)
-	case runtime.EventModelEnd:
+	case loops.EventModelEnd:
 		frame := frameModelEnd{T: "model_end", Turn: ev.ModelTurn}
 		if ev.Response != nil {
 			frame.Usage = usageToDTO(&ev.Response.Usage)
@@ -101,14 +101,14 @@ func mapEvent(ev runtime.Event) any {
 			}
 		}
 		return frame
-	case runtime.EventToolStart:
+	case loops.EventToolStart:
 		return frameToolStart{
 			T:    "tool_start",
 			Turn: ev.ModelTurn,
 			Idx:  ev.ToolIndex,
 			Call: toolCallToRecord(ev.ToolCall),
 		}
-	case runtime.EventToolEnd:
+	case loops.EventToolEnd:
 		return frameToolEnd{
 			T:      "tool_end",
 			Turn:   ev.ModelTurn,
@@ -116,14 +116,14 @@ func mapEvent(ev runtime.Event) any {
 			Call:   toolCallToRecord(ev.ToolCall),
 			Result: toolOutputToDTO(ev.ToolOutput),
 		}
-	case runtime.EventRunEnd:
+	case loops.EventRunEnd:
 		return frameRunEnd{T: "run_end", Stop: string(ev.StopReason)}
 	default:
 		return nil
 	}
 }
 
-func mapModelEvent(ev runtime.Event) any {
+func mapModelEvent(ev loops.Event) any {
 	m := ev.Model
 	switch m.Kind {
 	case models.EventPartStart:

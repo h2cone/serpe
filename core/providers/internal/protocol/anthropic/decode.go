@@ -3,20 +3,21 @@ package anthropic
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
-func decodeResponse(wire messageWire, requestID string, stateLimit int64) (*models.Response, error) {
+func decodeResponse(wire messageWire, requestID string, stateLimit int64, guard *shared.ToolCallGuard) (*models.Response, error) {
 	if wire.Error != nil {
 		return nil, normalizeWireError(wire.Error, "generate", requestID)
 	}
 	response := &models.Response{Provider: "anthropic", ID: wire.ID, Model: wire.Model, Status: models.ResponseStatusCompleted, RequestID: requestID}
 	candidate := models.Candidate{Index: 0, FinishReason: models.FinishUnknown}
 	hasState := false
-	for _, raw := range wire.Content {
+	for blockIndex, raw := range wire.Content {
 		var block contentWire
 		if err := json.Unmarshal(raw, &block); err != nil {
 			return nil, protocolError("Anthropic content block has an invalid shape", err)
@@ -28,6 +29,13 @@ func decodeResponse(wire messageWire, requestID string, stateLimit int64) (*mode
 			input, ok := normalizeToolInput(block.Input)
 			if !ok {
 				return nil, protocolError("Anthropic tool input is not a JSON object", nil)
+			}
+			key := strconv.Itoa(blockIndex)
+			if err := guard.Start(key, block.ID, block.Name); err != nil {
+				return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "anthropic", Operation: "generate", Code: "response_limit", Message: "Anthropic tool-call response exceeds configured limit", Cause: err}
+			}
+			if err := guard.AddArguments(key, len(input)); err != nil {
+				return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "anthropic", Operation: "generate", Code: "response_limit", Message: "Anthropic tool-call response exceeds configured limit", Cause: err}
 			}
 			candidate.Content = append(candidate.Content, models.ToolCallContent(block.ID, block.Name, input))
 		case "thinking":

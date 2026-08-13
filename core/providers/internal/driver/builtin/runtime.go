@@ -28,7 +28,7 @@ type Adapter struct {
 	Route            func(string, bool) (string, url.Values)
 	Encode           func(string, *models.Request, bool, shared.Config) ([]byte, error)
 	Decode           func([]byte, string, string, shared.Config) (*models.Response, error)
-	NewSource        func(*sse.Reader, string, string, shared.Config) models.EventSource
+	NewSource        func(*sse.Reader, string, string, shared.Config, models.StreamLimits) models.EventSource
 }
 
 // Provider implements the lifecycle shared by built-in HTTP protocol adapters.
@@ -44,8 +44,10 @@ func NewProvider(config shared.Config, adapter Adapter) *Provider {
 	return &Provider{config: config, adapter: adapter, client: httpx.New(httpx.Config{
 		BaseURL: config.BaseURL, Doer: config.HTTPClient, Authenticate: config.Authenticate,
 		Headers: config.Headers, Provider: config.Provider,
-		MaxErrorResponseBytes: config.Limits.MaxErrorResponseBytes,
-		RequireContentType:    !config.Policy.IgnoreContentType, Redact: config.Redact,
+		MaxErrorResponseBytes:  config.Limits.MaxErrorResponseBytes,
+		MaxResponseBytes:       config.Limits.MaxResponseBytes,
+		MaxStreamResponseBytes: config.Limits.MaxStreamResponseBytes,
+		RequireContentType:     !config.Policy.IgnoreContentType, Redact: config.Redact,
 	})}
 }
 
@@ -73,6 +75,36 @@ func (m *upstreamModel) Capabilities() models.CapabilitySet {
 	return m.provider.adapter.Capabilities
 }
 
+func (m *upstreamModel) ToolResultPolicy() (models.ToolResultPolicy, bool) {
+	return shared.ToolResultPolicy(m.provider.adapter.Provider, m.modelID, m.Capabilities())
+}
+
+func (m *upstreamModel) AllowsToolHistoryGroupDeletion() bool { return true }
+
+func (m *upstreamModel) ValidateToolDefinitions(defs []models.Tool) error {
+	for i := range defs {
+		if err := defs[i].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *upstreamModel) MaxEncodedRequestBytes() int64 {
+	return m.provider.config.Limits.MaxRequestBytes
+}
+
+func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *models.Request, stream bool) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	payload, err := m.provider.adapter.Encode(m.modelID, req, stream, m.provider.config)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(payload)), nil
+}
+
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	response, err := m.send(ctx, req, false)
 	if err != nil {
@@ -83,10 +115,18 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	if err != nil {
 		return nil, err
 	}
-	return m.provider.adapter.Decode(raw, httpx.RequestID(response.Header), m.modelID, config)
+	decoded, err := m.provider.adapter.Decode(raw, httpx.RequestID(response.Header), m.modelID, config)
+	if err != nil {
+		return nil, err
+	}
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+	return m.StreamWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) StreamWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (models.Stream, error) {
 	response, err := m.send(ctx, req, true)
 	if err != nil {
 		return nil, err
@@ -94,9 +134,11 @@ func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models
 	config := m.provider.config
 	source := m.provider.adapter.NewSource(
 		sse.NewReader(response.Body, config.Limits.MaxSSEEventBytes),
-		httpx.RequestID(response.Header), m.modelID, config,
+		httpx.RequestID(response.Header), m.modelID, config, limits,
 	)
-	return models.NewStream(ctx, source, models.WithStreamProvider(m.provider.adapter.Provider)), nil
+	return models.NewStream(ctx, source,
+		models.WithStreamProvider(m.provider.adapter.Provider),
+		models.WithStreamLimits(limits)), nil
 }
 
 func (m *upstreamModel) send(ctx context.Context, req *models.Request, stream bool) (*http.Response, error) {
@@ -107,6 +149,9 @@ func (m *upstreamModel) send(ctx context.Context, req *models.Request, stream bo
 	payload, err := adapter.Encode(m.modelID, req, stream, config)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > config.Limits.MaxRequestBytes {
+		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: adapter.Provider, Operation: "encode", Code: "request_too_large", Message: "encoded request exceeds provider limit"}
 	}
 	endpoint, query := adapter.CompleteEndpoint, url.Values(nil)
 	if stream {

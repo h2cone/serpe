@@ -3,6 +3,7 @@ package httpx
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -39,17 +40,32 @@ func DecodeError(response *http.Response, provider, operation string, limit int6
 		return &models.Error{Kind: kind, Provider: provider, Operation: operation, HTTPStatus: response.StatusCode, Message: http.StatusText(response.StatusCode), RequestID: RequestID(response.Header), Retryable: retryable}
 	}
 	defer response.Body.Close()
-	data, exceeded, readErr := readBounded(response.Body, limit)
+	reader, closeReader, decodeErr := decodedResponseReader(response)
+	if closeReader != nil {
+		defer closeReader()
+	}
+	var data []byte
+	var exceeded bool
+	readErr := decodeErr
+	if readErr == nil {
+		data, exceeded, readErr = readBounded(reader, limit)
+	}
 	message := http.StatusText(response.StatusCode)
 	code := ""
+	var strictErr error
 	if readErr == nil && !exceeded {
-		if extracted, extractedCode, ok := parseErrorBody(data); ok {
-			message = shared.FirstNonempty(extracted, message)
-			code = extractedCode
-		} else if len(bytes.TrimSpace(data)) > 0 {
-			// Prefer a short body snippet over a vague non-JSON label so
-			// gateway HTML/plain-text failures remain diagnosable.
-			message = truncateErrorSnippet(string(bytes.TrimSpace(data)), 256)
+		trimmed := bytes.TrimSpace(data)
+		switch {
+		case len(trimmed) == 0:
+		case errorBodyLooksJSON(response.Header.Get("Content-Type"), trimmed):
+			if strictErr = shared.ValidateErrorJSON(data); strictErr != nil {
+				message = "provider returned an invalid JSON error response"
+			} else if extracted, extractedCode, ok := parseErrorBody(data); ok {
+				message = shared.FirstNonempty(extracted, message)
+				code = extractedCode
+			}
+		default:
+			message = "provider returned a non-JSON error response"
 		}
 	} else if exceeded {
 		message = fmt.Sprintf("provider error response exceeds %d bytes", limit)
@@ -59,12 +75,22 @@ func DecodeError(response *http.Response, provider, operation string, limit int6
 	message = Redact(message, redact)
 	code = Redact(code, redact)
 	kind, retryable := StatusKind(response.StatusCode)
+	if strictErr != nil {
+		kind, retryable, code = models.ErrorProtocol, false, "invalid_json"
+	}
 	return &models.Error{
 		Kind: kind, Provider: provider, Operation: operation,
 		HTTPStatus: response.StatusCode, Code: code, Message: message,
 		RequestID: RequestID(response.Header), RetryAfter: RetryAfter(response.Header.Get("Retry-After")), Retryable: retryable,
-		Cause: readErr,
+		Cause: errors.Join(readErr, strictErr),
 	}
+}
+
+func errorBodyLooksJSON(contentType string, trimmed []byte) bool {
+	if HasMediaType(contentType, "application/json") || strings.HasSuffix(strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0])), "+json") {
+		return true
+	}
+	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
 }
 
 // parseErrorBody extracts a public message and code from common provider
@@ -93,15 +119,6 @@ func parseErrorBody(data []byte) (message, code string, ok bool) {
 		return "", "", false
 	}
 	return message, code, true
-}
-
-func truncateErrorSnippet(value string, max int) string {
-	// Collapse whitespace so HTML error pages stay readable in one log line.
-	value = strings.Join(strings.Fields(value), " ")
-	if max <= 0 || len(value) <= max {
-		return value
-	}
-	return value[:max] + "…"
 }
 
 // StatusKind maps an HTTP response status to the canonical model error kind

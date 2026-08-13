@@ -2,13 +2,14 @@ package google
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
-func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLimit int64) (*models.Response, error) {
+func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLimit int64, guard *shared.ToolCallGuard) (*models.Response, error) {
 	if wire.Error != nil {
 		return nil, normalizeWireError(wire.Error, "generate", requestID)
 	}
@@ -25,7 +26,7 @@ func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLim
 		candidate := models.Candidate{Index: index, RawFinishReason: wireCandidate.FinishReason, FinishReason: mapFinish(wireCandidate.FinishReason)}
 		hasTool := false
 		hasState := false
-		for _, part := range wireCandidate.Content.Parts {
+		for partIndex, part := range wireCandidate.Content.Parts {
 			switch {
 			case part.Text != nil && part.Thought:
 				if *part.Text != "" {
@@ -38,6 +39,13 @@ func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLim
 			case part.FunctionCall != nil:
 				if !shared.JSONObject(part.FunctionCall.Args) {
 					return nil, protocolError("Gemini functionCall args are not a JSON object", nil)
+				}
+				key := fmt.Sprintf("%d/%d", position, partIndex)
+				if err := guard.Start(key, part.FunctionCall.ID, part.FunctionCall.Name); err != nil {
+					return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "google", Operation: "generate", Code: "response_limit", Message: "Gemini tool-call response exceeds configured limit", Cause: err}
+				}
+				if err := guard.AddArguments(key, len(part.FunctionCall.Args)); err != nil {
+					return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "google", Operation: "generate", Code: "response_limit", Message: "Gemini tool-call response exceeds configured limit", Cause: err}
 				}
 				candidate.Content = append(candidate.Content, models.ToolCallContent(part.FunctionCall.ID, part.FunctionCall.Name, part.FunctionCall.Args))
 				hasTool = true

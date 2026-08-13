@@ -71,6 +71,36 @@ func (m *upstreamModel) Capabilities() models.CapabilitySet {
 	return defaultgoogle.ProtocolCapabilities()
 }
 
+func (m *upstreamModel) ToolResultPolicy() (models.ToolResultPolicy, bool) {
+	return shared.ToolResultPolicy("google", m.modelID, m.Capabilities())
+}
+
+func (m *upstreamModel) AllowsToolHistoryGroupDeletion() bool { return true }
+
+func (m *upstreamModel) ValidateToolDefinitions(defs []models.Tool) error {
+	for i := range defs {
+		if err := defs[i].Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *upstreamModel) MaxEncodedRequestBytes() int64 {
+	return m.provider.config.Limits.MaxRequestBytes
+}
+
+func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *models.Request, stream bool) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	payload, err := m.encode(req)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(payload)), nil
+}
+
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "google", "generate"); err != nil {
 		return nil, err
@@ -78,6 +108,9 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	payload, err := m.encode(req)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > m.MaxEncodedRequestBytes() {
+		return nil, googleRequestTooLarge("generate")
 	}
 	ctx, capture := sdkhttp.PrepareCall(ctx, "generate", payload)
 
@@ -101,16 +134,27 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 			Code: "missing_response_body", Message: "official Gemini SDK returned no response body",
 		}
 	}
-	return defaultgoogle.DecodeResponseJSON(raw, requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes)
+	decoded, err := defaultgoogle.DecodeResponseJSONWithLimits(raw, requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(m.provider.config.Limits, models.StreamLimits{}))
+	if err != nil {
+		return nil, err
+	}
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
+	return m.StreamWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) StreamWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (models.Stream, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "google", "stream"); err != nil {
 		return nil, err
 	}
 	payload, err := m.encode(req)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(payload)) > m.MaxEncodedRequestBytes() {
+		return nil, googleRequestTooLarge("stream")
 	}
 	streamCtx, capture, cancel := sdkhttp.PrepareStreamCall(ctx, "stream", payload)
 
@@ -143,8 +187,15 @@ func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models
 		sse.NewReaderWithClose(body, m.provider.config.Limits.MaxSSEEventBytes, func() error {
 			cancel()
 			return nil
-		}), requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes)
-	return models.NewStream(ctx, source, models.WithStreamProvider("google")), nil
+		}), requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes,
+		shared.EffectiveToolCallLimits(m.provider.config.Limits, limits))
+	return models.NewStream(ctx, source,
+		models.WithStreamProvider("google"),
+		models.WithStreamLimits(limits)), nil
+}
+
+func googleRequestTooLarge(operation string) error {
+	return &models.Error{Kind: models.ErrorInvalidRequest, Provider: "google", Operation: operation, Code: "request_too_large", Message: "encoded request exceeds provider limit"}
 }
 
 func (m *upstreamModel) encode(req *models.Request) ([]byte, error) {

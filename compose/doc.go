@@ -1,4 +1,4 @@
-// Package compose combines runtime.Runner with sessions.Manager into a reusable
+// Package compose combines loops.Runner with sessions.Manager into a reusable
 // turn boundary: one deep transaction that loads history, runs the agent, and
 // commits the transcript suffix only when the run completed successfully.
 //

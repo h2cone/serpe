@@ -1,25 +1,53 @@
-import { Form, useLoaderData } from "react-router";
+import { Form, redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/sessions.$id";
 import { ChatView } from "~/components/chat-view";
 import { TrashIcon } from "~/components/icons";
 import { api } from "~/lib/api";
+import { isAuthRequired } from "~/lib/auth";
 import type { SessionSummary } from "~/lib/wire";
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   const id = params.id!;
-  // Single GET: split meta/messages in-process (no dual full-detail fetch).
-  const session = await api.getSession(id);
-  const { messages, ...meta } = session;
-  return { meta, messages };
+  try {
+    // Single GET: split meta/messages in-process (no dual full-detail fetch).
+    const session = await api.getSession(id);
+    const {
+      messages,
+      message_start,
+      snapshot_length,
+      next_before,
+      ...meta
+    } = session;
+    return {
+      meta,
+      messages,
+      messageStart: message_start,
+      snapshotLength: snapshot_length,
+      nextBefore: next_before,
+    };
+  } catch (error) {
+    // The layout renders the in-memory credential gate. Avoid turning an
+    // expected pre-auth client load into the root error boundary.
+    if (isAuthRequired(error)) {
+      return {
+        meta: null,
+        messages: [],
+        messageStart: 0,
+        snapshotLength: 0,
+        nextBefore: undefined,
+      };
+    }
+    throw error;
+  }
 }
 
-export async function action({ request, params }: Route.ActionArgs) {
+export async function clientAction({ request, params }: Route.ClientActionArgs) {
   const id = params.id!;
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
   if (intent === "delete") {
     await api.deleteSession(id);
-    return Response.redirect("/", 303);
+    return redirect("/", 303);
   }
   if (intent === "rename") {
     const title = String(form.get("title") ?? "");
@@ -30,11 +58,24 @@ export async function action({ request, params }: Route.ActionArgs) {
 }
 
 export default function SessionRoute() {
-  const { meta, messages } = useLoaderData<typeof loader>();
+  const {
+    meta,
+    messages,
+    messageStart,
+    snapshotLength,
+    nextBefore,
+  } = useLoaderData<typeof clientLoader>();
+  if (!meta) return null;
   return (
     <div className="session-page">
       <SessionHeader meta={meta} />
-      <ChatView meta={meta} initialMessages={messages} />
+      <ChatView
+        meta={meta}
+        initialMessages={messages}
+        initialMessageStart={messageStart}
+        initialSnapshotLength={snapshotLength}
+        initialNextBefore={nextBefore}
+      />
     </div>
   );
 }

@@ -1,8 +1,10 @@
 package responses
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -26,6 +28,8 @@ type responseSource struct {
 	finished      bool
 	responseID    string
 	model         string
+	toolGuard     *shared.ToolCallGuard
+	toolLimits    shared.ToolCallLimits
 }
 
 type responsePartKey struct {
@@ -45,8 +49,12 @@ type responsePartState struct {
 
 // NewSSEStreamSource builds a Responses event source from a raw SSE response
 // obtained through an official SDK request.
-func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, ignoreUnknown bool, stateLimit int64) models.EventSource {
-	return &responseSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, ignoreUnknown: ignoreUnknown, stateLimit: stateLimit, parts: make(map[responsePartKey]*responsePartState)}
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, ignoreUnknown bool, stateLimit int64, toolLimits ...shared.ToolCallLimits) models.EventSource {
+	limits := shared.DefaultToolCallLimits()
+	if len(toolLimits) > 0 {
+		limits = toolLimits[0]
+	}
+	return &responseSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, ignoreUnknown: ignoreUnknown, stateLimit: stateLimit, parts: make(map[responsePartKey]*responsePartState), toolGuard: shared.NewToolCallGuard(limits), toolLimits: limits}
 }
 
 func (s *responseSource) Next() (models.Event, error) {
@@ -64,15 +72,17 @@ func (s *responseSource) Next() (models.Event, error) {
 			}
 			return models.Event{}, streamProtocol("sse_read_error", "failed to parse Responses SSE event", err)
 		}
-		data := strings.TrimSpace(string(wireEvent.Data))
-		if data == "" {
+		if len(wireEvent.Data) == 0 {
 			continue
 		}
-		if data == "[DONE]" {
+		if bytes.Equal(wireEvent.Data, []byte("[DONE]")) {
 			if s.finished {
 				continue
 			}
 			return models.Event{}, streamProtocol("unexpected_done", "Responses stream ended without a terminal response event", nil)
+		}
+		if err := shared.ValidateStreamJSON(wireEvent.Data); err != nil {
+			return models.Event{}, streamProtocol("invalid_json", "Responses stream event is not strict JSON", err)
 		}
 		var event streamEventWire
 		if err := json.Unmarshal(wireEvent.Data, &event); err != nil {
@@ -121,6 +131,9 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 				return streamProtocol("invalid_tool_call", "invalid function-call output item", err)
 			}
 			key := responsePartKey{kind: "function_call", outputIndex: event.OutputIndex}
+			if err := s.toolGuard.Start(responseToolKey(key), call.CallID, call.Name); err != nil {
+				return responseLimit(err)
+			}
 			s.startPart(key, models.ToolCallContent(call.CallID, call.Name, nil), event.ItemID, call.CallID, eventID)
 		}
 	case "response.content_part.added":
@@ -179,7 +192,7 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 		if s.parts[key] == nil {
 			return streamProtocol("missing_tool_start", "function arguments delta before output item", nil)
 		}
-		s.delta(key, models.Delta{Kind: models.DeltaToolArguments, Text: event.Delta}, event.ItemID, "", eventID)
+		return s.toolDelta(key, event.Delta, event.ItemID, "", eventID)
 	case "response.function_call_arguments.done":
 		key := responsePartKey{kind: "function_call", outputIndex: event.OutputIndex}
 		state := s.parts[key]
@@ -217,7 +230,7 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 		key := responsePartKey{kind: "reasoning_text", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
 		return s.finishValuePart(key, models.ReasoningSummary(""), models.DeltaReasoningSummary, event.Text, event.ItemID, eventID)
 	case "response.reasoning_summary_part.done":
-		s.endPart(responsePartKey{kind: "reasoning_summary", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}, eventID)
+		return s.endPart(responsePartKey{kind: "reasoning_summary", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}, eventID)
 	case "response.output_item.done":
 		var header itemHeader
 		if json.Unmarshal(event.Item, &header) == nil && header.Type == "function_call" {
@@ -230,10 +243,12 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 					if arguments == "" {
 						arguments = "{}"
 					}
-					s.delta(key, models.Delta{Kind: models.DeltaToolArguments, Text: arguments}, event.ItemID, call.CallID, eventID)
+					if err := s.toolDelta(key, arguments, event.ItemID, call.CallID, eventID); err != nil {
+						return err
+					}
 				}
 			}
-			s.endPart(key, eventID)
+			return s.endPart(key, eventID)
 		}
 	case "response.completed", "response.incomplete":
 		if !s.started {
@@ -284,6 +299,14 @@ func (s *responseSource) delta(key responsePartKey, delta models.Delta, itemID, 
 	s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: 0, PartIndex: state.part, Delta: delta, ItemID: itemID, CallID: callID, ProviderEventID: eventID})
 }
 
+func (s *responseSource) toolDelta(key responsePartKey, text, itemID, callID, eventID string) error {
+	if err := s.toolGuard.AddArguments(responseToolKey(key), len(text)); err != nil {
+		return responseLimit(err)
+	}
+	s.delta(key, models.Delta{Kind: models.DeltaToolArguments, Text: text}, itemID, callID, eventID)
+	return nil
+}
+
 func (s *responseSource) finishValuePart(key responsePartKey, content models.Content, deltaKind models.DeltaKind, full *string, itemID, eventID string) error {
 	if s.parts[key] == nil {
 		s.startPart(key, content, itemID, "", eventID)
@@ -298,23 +321,31 @@ func (s *responseSource) finishValuePart(key responsePartKey, content models.Con
 			return streamProtocol("terminal_content_mismatch", "Responses done event does not extend streamed content", nil)
 		}
 		if missing := strings.TrimPrefix(*full, current); missing != "" {
-			s.delta(key, models.Delta{Kind: deltaKind, Text: missing}, itemID, "", eventID)
+			if deltaKind == models.DeltaToolArguments {
+				if err := s.toolDelta(key, missing, itemID, "", eventID); err != nil {
+					return err
+				}
+			} else {
+				s.delta(key, models.Delta{Kind: deltaKind, Text: missing}, itemID, "", eventID)
+			}
 		}
 	}
-	s.endPart(key, eventID)
-	return nil
+	return s.endPart(key, eventID)
 }
 
-func (s *responseSource) endPart(key responsePartKey, eventID string) {
+func (s *responseSource) endPart(key responsePartKey, eventID string) error {
 	state := s.parts[key]
 	if state == nil || !state.open {
-		return
+		return nil
 	}
 	if state.kind == models.ContentToolCall && !state.hadDelta {
-		s.delta(key, models.Delta{Kind: models.DeltaToolArguments, Text: "{}"}, "", "", eventID)
+		if err := s.toolDelta(key, "{}", "", "", eventID); err != nil {
+			return err
+		}
 	}
 	state.open = false
 	s.queue.Push(models.Event{Kind: models.EventPartEnd, CandidateIndex: 0, PartIndex: state.part, ProviderEventID: eventID})
+	return nil
 }
 
 func (s *responseSource) complete(response responseWire, eventID string) error {
@@ -326,9 +357,11 @@ func (s *responseSource) complete(response responseWire, eventID string) error {
 	}
 	sort.Slice(keys, func(i, j int) bool { return s.parts[keys[i]].part < s.parts[keys[j]].part })
 	for _, key := range keys {
-		s.endPart(key, eventID)
+		if err := s.endPart(key, eventID); err != nil {
+			return err
+		}
 	}
-	decoded, err := decodeResponse(response, s.requestID, s.stateLimit)
+	decoded, err := decodeResponse(response, s.requestID, s.stateLimit, shared.NewToolCallGuard(s.toolLimits))
 	if err != nil {
 		return err
 	}
@@ -361,6 +394,14 @@ func (s *responseSource) complete(response responseWire, eventID string) error {
 	s.queue.Push(models.Event{Kind: models.EventResponseEnd, Response: info, Finishes: finishes, Usage: &usage, ProviderEventID: eventID})
 	s.finished = true
 	return nil
+}
+
+func responseToolKey(key responsePartKey) string {
+	return fmt.Sprintf("%d/%d", key.outputIndex, key.contentIndex)
+}
+
+func responseLimit(cause error) error {
+	return streamProtocol("response_limit", "Responses tool-call response exceeds configured limit", cause)
 }
 
 func (s *responseSource) accumulatedContent() ([]models.Content, error) {

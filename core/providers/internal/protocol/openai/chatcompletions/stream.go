@@ -1,8 +1,10 @@
 package chatcompletions
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"slices"
@@ -26,6 +28,7 @@ type chatSource struct {
 	model         string
 	created       int64
 	usage         *models.Usage
+	toolGuard     *shared.ToolCallGuard
 }
 
 type choiceStreamState struct {
@@ -49,8 +52,12 @@ type toolStreamState struct {
 
 // NewSSEStreamSource builds a Chat Completions event source from a raw SSE
 // response obtained through an official SDK request.
-func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string) models.EventSource {
-	return &chatSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, choices: make(map[int]*choiceStreamState)}
+func NewSSEStreamSource(reader *sse.Reader, requestID, fallbackModel string, toolLimits ...shared.ToolCallLimits) models.EventSource {
+	limits := shared.DefaultToolCallLimits()
+	if len(toolLimits) > 0 {
+		limits = toolLimits[0]
+	}
+	return &chatSource{reader: reader, requestID: requestID, fallbackModel: fallbackModel, choices: make(map[int]*choiceStreamState), toolGuard: shared.NewToolCallGuard(limits)}
 }
 
 func (s *chatSource) Next() (models.Event, error) {
@@ -68,11 +75,10 @@ func (s *chatSource) Next() (models.Event, error) {
 			}
 			return models.Event{}, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "sse_read_error", Message: "failed to parse Chat Completions SSE event", Cause: err}
 		}
-		data := strings.TrimSpace(string(event.Data))
-		if data == "" {
+		if len(event.Data) == 0 {
 			continue
 		}
-		if data == "[DONE]" {
+		if bytes.Equal(event.Data, []byte("[DONE]")) {
 			if !s.started {
 				return models.Event{}, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "missing_response", Message: "received [DONE] before a response chunk"}
 			}
@@ -82,6 +88,9 @@ func (s *chatSource) Next() (models.Event, error) {
 			s.finished = true
 			continue
 		}
+		if err := shared.ValidateStreamJSON(event.Data); err != nil {
+			return models.Event{}, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "invalid_json", Message: "Chat Completions stream event is not strict JSON", Cause: err}
+		}
 		var chunk chatResponse
 		if err := json.Unmarshal(event.Data, &chunk); err != nil {
 			return models.Event{}, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "invalid_json", Message: "Chat Completions stream event is not valid JSON", Cause: err}
@@ -89,11 +98,13 @@ func (s *chatSource) Next() (models.Event, error) {
 		if chunk.Error != nil {
 			return models.Event{}, normalizeWireError(chunk.Error, "stream_next", s.requestID)
 		}
-		s.consumeChunk(chunk, event.ID)
+		if err := s.consumeChunk(chunk, event.ID); err != nil {
+			return models.Event{}, err
+		}
 	}
 }
 
-func (s *chatSource) consumeChunk(chunk chatResponse, eventID string) {
+func (s *chatSource) consumeChunk(chunk chatResponse, eventID string) error {
 	if chunk.ID != "" {
 		s.responseID = chunk.ID
 	}
@@ -126,21 +137,28 @@ func (s *chatSource) consumeChunk(chunk chatResponse, eventID string) {
 			s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: choice.Index, PartIndex: part, Delta: models.Delta{Kind: models.DeltaRefusal, Text: *choice.Delta.Refusal}, ProviderEventID: eventID})
 		}
 		for _, delta := range choice.Delta.ToolCalls {
-			s.consumeToolDelta(choice.Index, state, delta.Index, delta.ID, delta.Function.Name, delta.Function.Arguments, eventID)
+			if err := s.consumeToolDelta(choice.Index, state, delta.Index, delta.ID, delta.Function.Name, delta.Function.Arguments, eventID); err != nil {
+				return err
+			}
 		}
 		if choice.Delta.FunctionCall != nil {
-			s.consumeToolDelta(choice.Index, state, -1, "", choice.Delta.FunctionCall.Name, choice.Delta.FunctionCall.Arguments, eventID)
+			if err := s.consumeToolDelta(choice.Index, state, -1, "", choice.Delta.FunctionCall.Name, choice.Delta.FunctionCall.Arguments, eventID); err != nil {
+				return err
+			}
 		}
 		if choice.FinishReason != nil {
 			state.rawFinish = *choice.FinishReason
 			state.finish = mapFinish(*choice.FinishReason)
-			s.closeChoice(choice.Index, state, eventID)
+			if err := s.closeChoice(choice.Index, state, eventID); err != nil {
+				return err
+			}
 		}
 	}
 	if chunk.Usage != nil {
 		usage := decodeUsage(chunk.Usage)
 		s.usage = &usage
 	}
+	return nil
 }
 
 func (s *chatSource) choice(index int) *choiceStreamState {
@@ -174,11 +192,31 @@ func (s *chatSource) ensureSimplePart(candidate int, state *choiceStreamState, k
 	return *pointer
 }
 
-func (s *chatSource) consumeToolDelta(candidate int, state *choiceStreamState, toolIndex int, id, name, arguments, eventID string) {
+func (s *chatSource) consumeToolDelta(candidate int, state *choiceStreamState, toolIndex int, id, name, arguments, eventID string) error {
+	key := fmt.Sprintf("%d/%d", candidate, toolIndex)
 	tool := state.tools[toolIndex]
 	if tool == nil {
+		if err := s.toolGuard.Start(key, id, name); err != nil {
+			return chatResponseLimit(err)
+		}
 		tool = &toolStreamState{part: -1}
 		state.tools[toolIndex] = tool
+	} else {
+		nextID, nextName := tool.id, tool.name
+		if id != "" {
+			nextID = id
+		}
+		if name != "" {
+			nextName = name
+		}
+		if err := s.toolGuard.Identity(key, nextID, nextName); err != nil {
+			return chatResponseLimit(err)
+		}
+	}
+	if arguments != "" {
+		if err := s.toolGuard.AddArguments(key, len(arguments)); err != nil {
+			return chatResponseLimit(err)
+		}
 	}
 	if id != "" {
 		tool.id = id
@@ -200,11 +238,15 @@ func (s *chatSource) consumeToolDelta(candidate int, state *choiceStreamState, t
 		tool.pending.Reset()
 		s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: candidate, PartIndex: tool.part, Delta: models.Delta{Kind: models.DeltaToolArguments, Text: fragment}, CallID: tool.id, ProviderEventID: eventID})
 	}
+	return nil
 }
 
-func (s *chatSource) closeChoice(candidate int, state *choiceStreamState, eventID string) {
-	for _, tool := range state.tools {
+func (s *chatSource) closeChoice(candidate int, state *choiceStreamState, eventID string) error {
+	for index, tool := range state.tools {
 		if tool.started && !tool.hadArgs {
+			if err := s.toolGuard.AddArguments(fmt.Sprintf("%d/%d", candidate, index), 2); err != nil {
+				return chatResponseLimit(err)
+			}
 			tool.hadArgs = true
 			s.queue.Push(models.Event{Kind: models.EventPartDelta, CandidateIndex: candidate, PartIndex: tool.part, Delta: models.Delta{Kind: models.DeltaToolArguments, Text: "{}"}, CallID: tool.id, ProviderEventID: eventID})
 		}
@@ -215,6 +257,7 @@ func (s *chatSource) closeChoice(candidate int, state *choiceStreamState, eventI
 			state.open[part] = false
 		}
 	}
+	return nil
 }
 
 func (s *chatSource) complete(eventID string) error {
@@ -227,7 +270,9 @@ func (s *chatSource) complete(eventID string) error {
 				return &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "incomplete_tool_call", Message: "tool call ended before its function name was received"}
 			}
 		}
-		s.closeChoice(index, state, eventID)
+		if err := s.closeChoice(index, state, eventID); err != nil {
+			return err
+		}
 		finishes = append(finishes, models.CandidateFinish{CandidateIndex: index, Reason: state.finish, RawReason: state.rawFinish})
 	}
 	modelName := s.model
@@ -236,6 +281,10 @@ func (s *chatSource) complete(eventID string) error {
 	}
 	s.queue.Push(models.Event{Kind: models.EventResponseEnd, ProviderEventID: eventID, Response: &models.ResponseInfo{Provider: "openai", ID: s.responseID, Model: modelName, Status: models.ResponseStatusCompleted, RequestID: s.requestID}, Finishes: finishes, Usage: s.usage})
 	return nil
+}
+
+func chatResponseLimit(cause error) error {
+	return &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "response_limit", Message: "Chat Completions tool-call response exceeds configured limit", Cause: cause}
 }
 
 func (s *chatSource) Close() error {

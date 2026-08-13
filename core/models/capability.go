@@ -13,6 +13,7 @@ const (
 	CapabilityReasoningSummary
 	CapabilityProviderState
 	CapabilityMultipleCandidates
+	CapabilityToolResultImage
 )
 
 // CapabilitySet is an allocation-free set of adapter capabilities.

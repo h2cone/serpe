@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/providers/internal/shared"
 	"github.com/h2cone/serpe/core/providers/internal/transport/sse"
 )
 
@@ -22,7 +23,7 @@ func BenchmarkOpenAIChatUnaryDecode(b *testing.B) {
 		if err := json.Unmarshal(chatUnaryFixture, &wire); err != nil {
 			b.Fatal(err)
 		}
-		if _, err := decodeResponse(wire, ""); err != nil {
+		if _, err := decodeResponse(wire, "", shared.NewToolCallGuard(shared.DefaultToolCallLimits())); err != nil {
 			b.Fatal(err)
 		}
 	}

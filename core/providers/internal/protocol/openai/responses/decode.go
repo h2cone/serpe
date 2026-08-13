@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/h2cone/serpe/core/models"
@@ -9,7 +10,7 @@ import (
 	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
 
-func decodeResponse(wire responseWire, requestID string, stateLimit int64) (*models.Response, error) {
+func decodeResponse(wire responseWire, requestID string, stateLimit int64, guard *shared.ToolCallGuard) (*models.Response, error) {
 	if wire.Error != nil {
 		return nil, normalizeWireError(wire.Error, "generate", requestID)
 	}
@@ -20,7 +21,7 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64) (*mod
 	candidate := models.Candidate{Index: 0}
 	hasState := false
 	hasToolCall := false
-	for _, raw := range wire.Output {
+	for outputIndex, raw := range wire.Output {
 		var header itemHeader
 		if err := json.Unmarshal(raw, &header); err != nil {
 			return nil, protocolError("response output item has an invalid shape", err)
@@ -47,6 +48,13 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64) (*mod
 			var item functionCallWire
 			if err := json.Unmarshal(raw, &item); err != nil || !shared.JSONObject([]byte(item.Arguments)) {
 				return nil, protocolError("response function call has invalid arguments", err)
+			}
+			key := strconv.Itoa(outputIndex)
+			if err := guard.Start(key, item.CallID, item.Name); err != nil {
+				return nil, responseDecodeLimit(err)
+			}
+			if err := guard.AddArguments(key, len(item.Arguments)); err != nil {
+				return nil, responseDecodeLimit(err)
 			}
 			candidate.Content = append(candidate.Content, models.ToolCallContent(item.CallID, item.Name, json.RawMessage(item.Arguments)))
 			hasToolCall = true
@@ -88,6 +96,10 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64) (*mod
 		response.Usage = decodeUsage(wire.Usage)
 	}
 	return response, nil
+}
+
+func responseDecodeLimit(cause error) error {
+	return &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "generate", Code: "response_limit", Message: "Responses tool-call response exceeds configured limit", Cause: cause}
 }
 
 func decodeUsage(usage *usageWire) models.Usage {

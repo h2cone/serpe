@@ -108,6 +108,116 @@ func TestBaseURLVersionSuffixOverridesProtocolDefault(t *testing.T) {
 	}
 }
 
+// The closed catalog and wire fixture below track the Google GenerateContent
+// multimodal function-response and model lifecycle pages as visible on
+// 2026-08-12, rechecked on 2026-08-13. Updating model aliases or the nested
+// functionResponse wire requires an explicit fixture change here.
+func TestGeminiMultimodalFunctionResponsePolicyAndWire(t *testing.T) {
+	allowedModels := []string{
+		"gemini-3-flash-preview",
+		"gemini-3.1-pro-preview",
+		"gemini-3.1-pro-preview-customtools",
+		"gemini-3.1-flash-lite",
+		"gemini-3.5-flash",
+		"gemini-3.5-flash-lite",
+		"gemini-3.6-flash",
+	}
+	deniedModels := []string{
+		"gemini-2.5-flash",
+		"gemini-3-future",
+		"gemini-3.1-flash-image",
+		"gemini-3-pro-image",
+		"gemini-3.1-flash-live-preview",
+		"gemini-flash-latest",
+	}
+	wantPolicy := models.ToolResultPolicy{
+		InlineImages:     true,
+		MIMETypes:        []string{"image/jpeg", "image/png", "image/webp"},
+		MaxRawImageBytes: 7 << 20,
+		MaxImages:        64,
+		MaxWidth:         8192,
+		MaxHeight:        8192,
+		MaxPixels:        40_000_000,
+	}
+	for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
+		t.Run(string(driver)+"_policy", func(t *testing.T) {
+			provider, err := providers.New(providers.Config{Protocol: providers.GeminiGenerateContent, Driver: driver})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, modelID := range allowedModels {
+				model, err := provider.ResolveModel(modelID)
+				if err != nil {
+					t.Fatalf("ResolveModel(%q): %v", modelID, err)
+				}
+				reporter, ok := model.(models.ToolResultPolicyReporter)
+				if !ok {
+					t.Fatalf("%q has no ToolResultPolicyReporter", modelID)
+				}
+				policy, supported := reporter.ToolResultPolicy()
+				if !supported || !reflect.DeepEqual(policy, wantPolicy) {
+					t.Fatalf("ToolResultPolicy(%q) = (%+v, %t), want (%+v, true)", modelID, policy, supported, wantPolicy)
+				}
+			}
+			for _, modelID := range deniedModels {
+				model, err := provider.ResolveModel(modelID)
+				if err != nil {
+					t.Fatalf("ResolveModel(%q): %v", modelID, err)
+				}
+				policy, supported := model.(models.ToolResultPolicyReporter).ToolResultPolicy()
+				if supported || !reflect.DeepEqual(policy, models.ToolResultPolicy{}) {
+					t.Fatalf("ToolResultPolicy(%q) = (%+v, %t), want zero/false", modelID, policy, supported)
+				}
+			}
+		})
+
+		t.Run(string(driver)+"_wire", func(t *testing.T) {
+			body := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				raw, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Errorf("read body: %v", err)
+					writer.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				body <- string(raw)
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, unaryFixture(providers.GeminiGenerateContent, false))
+			}))
+			defer server.Close()
+			provider, err := providers.New(providers.Config{
+				Protocol:   providers.GeminiGenerateContent,
+				Driver:     driver,
+				BaseURL:    server.URL,
+				APIKey:     "test-secret",
+				HTTPClient: server.Client(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			model, err := provider.ResolveModel("gemini-3.6-flash")
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := &models.Request{Messages: []models.Message{
+				models.NewAssistantMessage(models.ToolCallContent("call-1", "lookup", json.RawMessage(`{"x":1}`))),
+				models.NewUserMessage(models.ToolResultContent(
+					"call-1", "lookup", false,
+					models.Text("done"),
+					models.ImageBytes("image/png", []byte{0x89, 0x50, 0x4e, 0x47}),
+				)),
+			}}
+			if _, err := model.Complete(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			want := `{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{"x":1}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call-1","name":"lookup","response":{"result":"done"},"parts":[{"inlineData":{"mimeType":"image/png","data":"iVBORw=="}}]}}]}]}`
+			if got := <-body; got != want {
+				t.Fatalf("Gemini multimodal function response wire\n got: %s\nwant: %s", got, want)
+			}
+		})
+	}
+}
+
 func runConformanceCase(t *testing.T, protocol providers.Protocol, driver providers.Driver, modelID, unaryPath, streamPath string, tool bool) {
 	t.Helper()
 	var calls atomic.Int64

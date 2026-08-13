@@ -3,27 +3,27 @@ package httpapi_test
 import (
 	"testing"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
-	"github.com/h2cone/serpe/runtime/sessions"
 	"github.com/h2cone/serpe/internal/httpapi"
+	"github.com/h2cone/serpe/runtime/loops"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 func TestNewRequiresOneRunnerManagerCompositionRoot(t *testing.T) {
-	runner, err := runtime.NewRunner(runtime.Config{
+	runner, err := loops.New(loops.Config{
 		Model: &scriptedModel{responses: []*models.Response{textResponse("ok")}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := sessions.NewManager(sessions.NewMemoryStore())
+	manager, err := sessions.NewManager(sessions.NewMemoryStore(), sessions.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	invalid := []httpapi.Config{
-		{Manager: manager, CWD: "/tmp"},
-		{Runner: runner, CWD: "/tmp"},
+		{Manager: manager, CWD: t.TempDir()},
+		{Runner: runner, CWD: t.TempDir()},
 		{Runner: runner, Manager: manager, CWD: "  "},
 	}
 	for i, cfg := range invalid {
@@ -31,7 +31,7 @@ func TestNewRequiresOneRunnerManagerCompositionRoot(t *testing.T) {
 			t.Fatalf("invalid config %d succeeded", i)
 		}
 	}
-	if _, err := httpapi.New(httpapi.Config{Runner: runner, Manager: manager, CWD: "/tmp"}); err != nil {
+	if _, err := httpapi.New(httpapi.Config{Runner: runner, Manager: manager, CWD: t.TempDir(), AllowInsecureNoAuth: true}); err != nil {
 		t.Fatalf("valid config failed: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,10 +15,17 @@ import (
 )
 
 const (
-	defaultMaxResponseBytes      = 32 << 20
-	defaultMaxErrorResponseBytes = 64 << 10
-	defaultMaxSSEEventBytes      = 2 << 20
-	defaultMaxProviderStateBytes = 2 << 20
+	defaultMaxResponseBytes       = 32 << 20
+	defaultMaxStreamResponseBytes = 32 << 20
+	defaultMaxErrorResponseBytes  = 64 << 10
+	defaultMaxSSEEventBytes       = 2 << 20
+	defaultMaxProviderStateBytes  = 2 << 20
+	defaultMaxRequestBytes        = 32 << 20
+	defaultMaxToolCalls           = 128
+	defaultMaxCallIDBytes         = 1 << 10
+	defaultMaxToolNameBytes       = 1 << 10
+	defaultMaxArgumentsBytes      = 16 << 20
+	defaultMaxBatchArgumentBytes  = 16 << 20
 )
 
 // Doer matches http.Client.Do and permits test transports and instrumented
@@ -81,10 +89,17 @@ func (a *bearerAuthenticator) Authenticate(ctx context.Context, request *http.Re
 // Limits bounds independently allocated response data. Zero fields receive
 // conservative defaults.
 type Limits struct {
-	MaxResponseBytes      int64
-	MaxErrorResponseBytes int64
-	MaxSSEEventBytes      int64
-	MaxProviderStateBytes int64
+	MaxRequestBytes        int64
+	MaxResponseBytes       int64
+	MaxStreamResponseBytes int64
+	MaxErrorResponseBytes  int64
+	MaxSSEEventBytes       int64
+	MaxProviderStateBytes  int64
+	MaxToolCalls           int
+	MaxCallIDBytes         int64
+	MaxToolNameBytes       int64
+	MaxArgumentsBytes      int64
+	MaxBatchArgumentBytes  int64
 }
 
 // Config creates one immutable Provider. Model ID is deliberately absent and
@@ -122,6 +137,12 @@ func normalizeConfig(config Config, spec protocolSpec) (shared.Config, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return shared.Config{}, fmt.Errorf("providers: BaseURL scheme must be http or https")
 	}
+	if parsed.Scheme == "http" {
+		ip := net.ParseIP(parsed.Hostname())
+		if ip == nil || !ip.IsLoopback() {
+			return shared.Config{}, fmt.Errorf("providers: plaintext BaseURL requires a literal loopback address")
+		}
+	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return shared.Config{}, fmt.Errorf("providers: BaseURL must not contain user info, query, or fragment")
 	}
@@ -145,7 +166,10 @@ func normalizeConfig(config Config, spec protocolSpec) (shared.Config, error) {
 	}
 	doer := config.HTTPClient
 	if doer == nil {
-		doer = &http.Client{Transport: defaultTransport()}
+		doer = &http.Client{
+			Transport:     defaultTransport(),
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	authenticate := shared.AuthenticateFunc(nil)
 	var redact []string
@@ -175,6 +199,7 @@ func normalizeConfig(config Config, spec protocolSpec) (shared.Config, error) {
 func defaultTransport() *http.Transport {
 	if standard, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport := standard.Clone()
+		transport.Proxy = nil
 		if transport.ResponseHeaderTimeout == 0 {
 			transport.ResponseHeaderTimeout = 30 * time.Second
 		}
@@ -184,7 +209,7 @@ func defaultTransport() *http.Transport {
 		return transport
 	}
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 nil,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   16,
@@ -196,8 +221,8 @@ func defaultTransport() *http.Transport {
 }
 
 func normalizeLimits(input Limits) (shared.Limits, error) {
-	values := []*int64{&input.MaxResponseBytes, &input.MaxErrorResponseBytes, &input.MaxSSEEventBytes, &input.MaxProviderStateBytes}
-	defaults := [...]int64{defaultMaxResponseBytes, defaultMaxErrorResponseBytes, defaultMaxSSEEventBytes, defaultMaxProviderStateBytes}
+	values := []*int64{&input.MaxRequestBytes, &input.MaxResponseBytes, &input.MaxStreamResponseBytes, &input.MaxErrorResponseBytes, &input.MaxSSEEventBytes, &input.MaxProviderStateBytes, &input.MaxCallIDBytes, &input.MaxToolNameBytes, &input.MaxArgumentsBytes, &input.MaxBatchArgumentBytes}
+	defaults := [...]int64{defaultMaxRequestBytes, defaultMaxResponseBytes, defaultMaxStreamResponseBytes, defaultMaxErrorResponseBytes, defaultMaxSSEEventBytes, defaultMaxProviderStateBytes, defaultMaxCallIDBytes, defaultMaxToolNameBytes, defaultMaxArgumentsBytes, defaultMaxBatchArgumentBytes}
 	for i, value := range values {
 		if *value < 0 {
 			return shared.Limits{}, fmt.Errorf("providers: byte limits must not be negative")
@@ -205,6 +230,22 @@ func normalizeLimits(input Limits) (shared.Limits, error) {
 		if *value == 0 {
 			*value = defaults[i]
 		}
+		if *value > defaults[i] {
+			return shared.Limits{}, fmt.Errorf("providers: byte limit exceeds package ceiling %d", defaults[i])
+		}
+	}
+	if input.MaxToolCalls < 0 || input.MaxToolCalls > defaultMaxToolCalls {
+		return shared.Limits{}, fmt.Errorf("providers: MaxToolCalls must be between 1 and %d", defaultMaxToolCalls)
+	}
+	if input.MaxToolCalls == 0 {
+		input.MaxToolCalls = defaultMaxToolCalls
+	}
+	if input.MaxCallIDBytes < 1 || input.MaxToolNameBytes < 1 || input.MaxArgumentsBytes < 2 {
+		return shared.Limits{}, fmt.Errorf("providers: decoded tool limits are too small")
+	}
+	minimumBatch := int64(input.MaxToolCalls) * 2
+	if input.MaxBatchArgumentBytes < minimumBatch {
+		return shared.Limits{}, fmt.Errorf("providers: MaxBatchArgumentBytes cannot hold %d minimal tool calls", input.MaxToolCalls)
 	}
 	return shared.Limits(input), nil
 }

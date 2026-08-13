@@ -19,6 +19,19 @@ var (
 	// ErrConflict reports an optimistic-concurrency failure: the transcript
 	// length observed before a write no longer matches at commit time.
 	ErrConflict = errors.New("session transcript conflict")
+	// ErrClosed reports use of a Store or Manager after Close linearized.
+	ErrClosed = errors.New("sessions closed")
+	// ErrRecordTooLarge reports a projected message that cannot be represented
+	// by the configured detail/admission ceiling.
+	ErrRecordTooLarge = errors.New("session record too large")
+	// ErrCommitUncertain means atomic visibility succeeded but a subsequent
+	// durability operation failed; callers must not blindly retry.
+	ErrCommitUncertain = errors.New("session commit durability uncertain")
+	// ErrMigrationRequired identifies a legacy FileStore layout that must be
+	// migrated offline before normal use.
+	ErrMigrationRequired = errors.New("session store migration required")
+	// ErrStoreCorrupt identifies a contradictory marker or record filename.
+	ErrStoreCorrupt = errors.New("session store corrupt")
 )
 
 // invalidf wraps a format string with ErrInvalidSession.

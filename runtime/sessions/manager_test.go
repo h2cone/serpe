@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,15 +39,16 @@ func (f *flakyStore) Save(ctx context.Context, id string, data []byte) error {
 
 func mustManager(t *testing.T, store Store) *Manager {
 	t.Helper()
-	m, err := NewManager(store)
+	m, err := NewManager(store, Limits{})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	t.Cleanup(func() { _ = m.Close() })
 	return m
 }
 
 func TestNewManagerNilStore(t *testing.T) {
-	if _, err := NewManager(nil); err == nil {
+	if _, err := NewManager(nil, Limits{}); err == nil {
 		t.Fatal("NewManager(nil) succeeded, want error")
 	}
 }
@@ -61,14 +63,14 @@ func TestCreateGet(t *testing.T) {
 	if _, err := m.Create(ctx, &Session{ID: "s1"}); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("Create(invalid) = %v, want ErrInvalidSession", err)
 	}
-	created, err := m.Create(ctx, New("s1", "/wd"))
+	created, err := m.Create(ctx, New("s1", testCWD("wd")))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if created.ID != "s1" || created.CWD != "/wd" {
+	if created.ID != "s1" || created.CWD != testCWD("wd") {
 		t.Fatalf("unexpected created snapshot: %+v", created)
 	}
-	if _, err := m.Create(ctx, New("s1", "/other")); !errors.Is(err, ErrAlreadyExists) {
+	if _, err := m.Create(ctx, New("s1", testCWD("other"))); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("duplicate Create = %v, want ErrAlreadyExists", err)
 	}
 	if _, err := m.Get(ctx, "s1 "); !errors.Is(err, ErrInvalidSession) {
@@ -86,7 +88,7 @@ func TestCreateGet(t *testing.T) {
 	got.CWD = "/mutated"
 	got.Metadata = map[string]string{"title": "x"}
 	again, _ := m.Get(ctx, "s1")
-	if again.CWD != "/wd" || again.Metadata != nil {
+	if again.CWD != testCWD("wd") || again.Metadata != nil {
 		t.Fatal("Get exposed internal storage")
 	}
 }
@@ -94,7 +96,7 @@ func TestCreateGet(t *testing.T) {
 func TestManagerRejectsRecordKeyMismatch(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStore()
-	data, err := marshalSession(New("payload-id", "/wd"))
+	data, err := marshalSession(New("payload-id", testCWD("wd")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,14 +119,14 @@ func TestManagerRejectsRecordKeyMismatch(t *testing.T) {
 func TestSetCWDAndSetMetadata(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.SetCWD(ctx, "s1", "/new")
+	got, err := m.SetCWD(ctx, "s1", testCWD("new"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CWD != "/new" {
+	if got.CWD != testCWD("new") {
 		t.Fatalf("CWD = %q", got.CWD)
 	}
 	if got.UpdatedAt.Before(got.CreatedAt) {
@@ -167,7 +169,7 @@ func TestSetCWDAndSetMetadata(t *testing.T) {
 func TestPatchMetadataPreservesConcurrentKeys(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +227,7 @@ func TestIntentWriteStoreFailureRollsBack(t *testing.T) {
 	store := &flakyStore{MemoryStore: NewMemoryStore()}
 	m := mustManager(t, store)
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 	store.failSave = true
@@ -233,7 +235,7 @@ func TestIntentWriteStoreFailureRollsBack(t *testing.T) {
 		t.Fatal("SetCWD succeeded despite failing store")
 	}
 	got, _ := m.Get(ctx, "s1")
-	if got.CWD != "/wd" {
+	if got.CWD != testCWD("wd") {
 		t.Fatalf("save error polluted stored state: %+v", got)
 	}
 }
@@ -241,7 +243,7 @@ func TestIntentWriteStoreFailureRollsBack(t *testing.T) {
 func TestAppend(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Append(ctx, "s1"); !errors.Is(err, ErrInvalidSession) {
@@ -281,7 +283,7 @@ func TestAppend(t *testing.T) {
 func TestAppendAt(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.AppendAt(ctx, "s1", 0); !errors.Is(err, ErrInvalidSession) {
@@ -324,7 +326,7 @@ func TestAppendAt(t *testing.T) {
 func TestFork(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	src := New("s1", "/wd")
+	src := New("s1", testCWD("wd"))
 	src.Metadata = map[string]string{"title": "t"}
 	if _, err := m.Create(ctx, src); err != nil {
 		t.Fatal(err)
@@ -341,7 +343,7 @@ func TestFork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
-	if child.ID != "s2" || child.ParentID != "s1" || child.CWD != "/wd" || child.Metadata["title"] != "t" {
+	if child.ID != "s2" || child.ParentID != "s1" || child.CWD != testCWD("wd") || child.Metadata["title"] != "t" {
 		t.Fatalf("unexpected fork: %+v", child)
 	}
 	if len(child.Messages) != 1 || !child.Messages[0].Equal(parent.Messages[0]) {
@@ -385,7 +387,7 @@ func TestManagerContextCanceled(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := m.Create(ctx, New("s1", "/wd")); !errors.Is(err, context.Canceled) {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create = %v, want context.Canceled", err)
 	}
 	if _, err := m.Get(context.Background(), "s1"); !errors.Is(err, ErrNotFound) {
@@ -396,7 +398,7 @@ func TestManagerContextCanceled(t *testing.T) {
 func TestConcurrentSameIDNoLostUpdate(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 	const goroutines, perGoroutine = 8, 5
@@ -443,7 +445,7 @@ func TestConcurrentDifferentIDsParallel(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id := fmt.Sprintf("s%d", i)
-			if _, err := m.Create(ctx, New(id, "/wd")); err != nil {
+			if _, err := m.Create(ctx, New(id, testCWD("wd"))); err != nil {
 				errs <- err
 				return
 			}
@@ -472,7 +474,7 @@ func TestAppendBlocksDelete(t *testing.T) {
 	store := &flakyStore{MemoryStore: NewMemoryStore(), blockSave: blockSave, saving: make(chan struct{})}
 	m := mustManager(t, store)
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -511,7 +513,7 @@ func TestAppendBlocksFork(t *testing.T) {
 	store := &flakyStore{MemoryStore: NewMemoryStore(), blockSave: blockSave, saving: make(chan struct{})}
 	m := mustManager(t, store)
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -555,7 +557,7 @@ func TestAppendBlocksFork(t *testing.T) {
 func TestProviderStateRoundTrip(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
-	if _, err := m.Create(ctx, New("s1", "/wd")); err != nil {
+	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
 	resp := &models.Response{
@@ -596,7 +598,7 @@ func TestLockTableReclaimed(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 20; i++ {
 		id := fmt.Sprintf("s%d", i)
-		if _, err := m.Create(ctx, New(id, "/wd")); err != nil {
+		if _, err := m.Create(ctx, New(id, testCWD("wd"))); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := m.Append(ctx, id, models.NewUserMessage(models.Text("x"))); err != nil {
@@ -684,6 +686,21 @@ func (s *noCopyStore) List(ctx context.Context) ([]Record, error) {
 	return out, nil
 }
 
+func (s *noCopyStore) ListIDsPage(ctx context.Context, afterID string, limit int) ([]string, string, error) {
+	if err := validatePage(afterID, limit); err != nil {
+		return nil, "", err
+	}
+	selected := &maxIDHeap{}
+	heap.Init(selected)
+	for id := range s.saved {
+		selectPageID(selected, id, afterID, limit+1)
+	}
+	ids, next := completeIDPage(selected, limit)
+	return ids, next, ctx.Err()
+}
+
+func (s *noCopyStore) Close() error { return nil }
+
 // TestManagerClonesAtWriteBoundary verifies the Manager codec owns caller
 // input and produces independent source/fork snapshots even with a backend
 // that does not honor byte ownership.
@@ -693,7 +710,7 @@ func TestManagerClonesAtWriteBoundary(t *testing.T) {
 	t.Run("create input is cloned", func(t *testing.T) {
 		store := &noCopyStore{saved: map[string][]byte{}}
 		m := mustManager(t, store)
-		input := New("s1", "/wd")
+		input := New("s1", testCWD("wd"))
 		input.Messages = []models.Message{models.NewUserMessage(models.Text("hi"))}
 		if _, err := m.Create(ctx, input); err != nil {
 			t.Fatal(err)
@@ -702,7 +719,7 @@ func TestManagerClonesAtWriteBoundary(t *testing.T) {
 		input.CWD = "/mutated"
 		input.Messages[0].Content[0].Text.Text = "mutated"
 		got, _ := m.Get(ctx, "s1")
-		if got.CWD != "/wd" || got.Messages[0].Content[0].Text.Text != "hi" {
+		if got.CWD != testCWD("wd") || got.Messages[0].Content[0].Text.Text != "hi" {
 			t.Fatalf("Create did not clone input at the boundary: %+v", got)
 		}
 	})
@@ -710,7 +727,7 @@ func TestManagerClonesAtWriteBoundary(t *testing.T) {
 	t.Run("fork child does not alias source", func(t *testing.T) {
 		store := &noCopyStore{saved: map[string][]byte{}}
 		m := mustManager(t, store)
-		src := New("s1", "/wd")
+		src := New("s1", testCWD("wd"))
 		src.Messages = []models.Message{models.NewUserMessage(models.Text("hi"))}
 		if _, err := m.Create(ctx, src); err != nil {
 			t.Fatal(err)

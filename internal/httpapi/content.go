@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/h2cone/serpe/runtime"
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/tools"
 	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
@@ -17,8 +17,11 @@ type messageDTO struct {
 }
 
 type toolResultDTO struct {
-	Content []models.ContentRecord `json:"content"`
-	IsError bool                   `json:"is_error,omitempty"`
+	Content   []models.ContentRecord `json:"content"`
+	IsError   bool                   `json:"is_error,omitempty"`
+	Truncated bool                   `json:"truncated,omitempty"`
+	SHA256    string                 `json:"sha256,omitempty"`
+	KeptBytes int64                  `json:"kept_bytes,omitempty"`
 }
 
 type usageDTO struct {
@@ -85,7 +88,7 @@ func toolCallToRecord(call *models.ToolCall) models.ContentRecord {
 	return rec
 }
 
-func toolOutputToDTO(out *runtime.ToolOutput) toolResultDTO {
+func toolOutputToDTO(out *tools.Output) toolResultDTO {
 	if out == nil {
 		return toolResultDTO{Content: []models.ContentRecord{}}
 	}
@@ -98,7 +101,13 @@ func toolOutputToDTO(out *runtime.ToolOutput) toolResultDTO {
 	if content == nil {
 		content = []models.ContentRecord{}
 	}
-	return toolResultDTO{Content: content, IsError: out.IsError}
+	return toolResultDTO{
+		Content:   content,
+		IsError:   out.IsError,
+		Truncated: out.Stats.Truncated,
+		SHA256:    out.Stats.SHA256,
+		KeptBytes: out.Stats.KeptBytes,
+	}
 }
 
 func usageToDTO(u *models.Usage) *usageDTO {
