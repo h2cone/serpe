@@ -21,11 +21,6 @@ const (
 	defaultMaxSSEEventBytes       = 2 << 20
 	defaultMaxProviderStateBytes  = 2 << 20
 	defaultMaxRequestBytes        = 32 << 20
-	defaultMaxToolCalls           = 128
-	defaultMaxCallIDBytes         = 1 << 10
-	defaultMaxToolNameBytes       = 1 << 10
-	defaultMaxArgumentsBytes      = 16 << 20
-	defaultMaxBatchArgumentBytes  = 16 << 20
 )
 
 // Doer matches http.Client.Do and permits test transports and instrumented
@@ -86,20 +81,15 @@ func (a *bearerAuthenticator) Authenticate(ctx context.Context, request *http.Re
 	return nil
 }
 
-// Limits bounds independently allocated response data. Zero fields receive
-// conservative defaults.
-type Limits struct {
+// TransportLimits bounds independently allocated transport data. Zero fields
+// receive conservative defaults. Tool-call grammar is not configured here.
+type TransportLimits struct {
 	MaxRequestBytes        int64
 	MaxResponseBytes       int64
 	MaxStreamResponseBytes int64
 	MaxErrorResponseBytes  int64
 	MaxSSEEventBytes       int64
 	MaxProviderStateBytes  int64
-	MaxToolCalls           int
-	MaxCallIDBytes         int64
-	MaxToolNameBytes       int64
-	MaxArgumentsBytes      int64
-	MaxBatchArgumentBytes  int64
 }
 
 // Config creates one immutable Provider. Model ID is deliberately absent and
@@ -117,7 +107,7 @@ type Config struct {
 	APIKey        string
 	Authenticator Authenticator
 	HTTPClient    Doer
-	Limits        Limits
+	Limits        TransportLimits
 	Policy        Policy
 	Headers       http.Header
 }
@@ -220,9 +210,9 @@ func defaultTransport() *http.Transport {
 	}
 }
 
-func normalizeLimits(input Limits) (shared.Limits, error) {
-	values := []*int64{&input.MaxRequestBytes, &input.MaxResponseBytes, &input.MaxStreamResponseBytes, &input.MaxErrorResponseBytes, &input.MaxSSEEventBytes, &input.MaxProviderStateBytes, &input.MaxCallIDBytes, &input.MaxToolNameBytes, &input.MaxArgumentsBytes, &input.MaxBatchArgumentBytes}
-	defaults := [...]int64{defaultMaxRequestBytes, defaultMaxResponseBytes, defaultMaxStreamResponseBytes, defaultMaxErrorResponseBytes, defaultMaxSSEEventBytes, defaultMaxProviderStateBytes, defaultMaxCallIDBytes, defaultMaxToolNameBytes, defaultMaxArgumentsBytes, defaultMaxBatchArgumentBytes}
+func normalizeLimits(input TransportLimits) (shared.Limits, error) {
+	values := []*int64{&input.MaxRequestBytes, &input.MaxResponseBytes, &input.MaxStreamResponseBytes, &input.MaxErrorResponseBytes, &input.MaxSSEEventBytes, &input.MaxProviderStateBytes}
+	defaults := [...]int64{defaultMaxRequestBytes, defaultMaxResponseBytes, defaultMaxStreamResponseBytes, defaultMaxErrorResponseBytes, defaultMaxSSEEventBytes, defaultMaxProviderStateBytes}
 	for i, value := range values {
 		if *value < 0 {
 			return shared.Limits{}, fmt.Errorf("providers: byte limits must not be negative")
@@ -234,20 +224,14 @@ func normalizeLimits(input Limits) (shared.Limits, error) {
 			return shared.Limits{}, fmt.Errorf("providers: byte limit exceeds package ceiling %d", defaults[i])
 		}
 	}
-	if input.MaxToolCalls < 0 || input.MaxToolCalls > defaultMaxToolCalls {
-		return shared.Limits{}, fmt.Errorf("providers: MaxToolCalls must be between 1 and %d", defaultMaxToolCalls)
-	}
-	if input.MaxToolCalls == 0 {
-		input.MaxToolCalls = defaultMaxToolCalls
-	}
-	if input.MaxCallIDBytes < 1 || input.MaxToolNameBytes < 1 || input.MaxArgumentsBytes < 2 {
-		return shared.Limits{}, fmt.Errorf("providers: decoded tool limits are too small")
-	}
-	minimumBatch := int64(input.MaxToolCalls) * 2
-	if input.MaxBatchArgumentBytes < minimumBatch {
-		return shared.Limits{}, fmt.Errorf("providers: MaxBatchArgumentBytes cannot hold %d minimal tool calls", input.MaxToolCalls)
-	}
-	return shared.Limits(input), nil
+	return shared.Limits{
+		MaxRequestBytes:        input.MaxRequestBytes,
+		MaxResponseBytes:       input.MaxResponseBytes,
+		MaxStreamResponseBytes: input.MaxStreamResponseBytes,
+		MaxErrorResponseBytes:  input.MaxErrorResponseBytes,
+		MaxSSEEventBytes:       input.MaxSSEEventBytes,
+		MaxProviderStateBytes:  input.MaxProviderStateBytes,
+	}, nil
 }
 
 func validateHeaders(headers http.Header) error {

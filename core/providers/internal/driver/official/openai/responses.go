@@ -42,10 +42,10 @@ func (a *responsesAdapter) startStream(ctx context.Context, payload []byte, opti
 	return sdkhttp.StartStream(a.service.NewStreaming(ctx, params, options...))
 }
 
-func (*responsesAdapter) decode(raw []byte, requestID string, config shared.Config) (*models.Response, error) {
-	return defaultresponses.DecodeResponseJSONWithLimits(raw, requestID, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
+func (*responsesAdapter) decode(raw []byte, requestID string, config shared.Config, limits models.StreamLimits) (*models.Response, error) {
+	return defaultresponses.DecodeResponseJSONWithLimits(raw, requestID, config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 }
 
 func (*responsesAdapter) newSource(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
-	return defaultresponses.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, limits))
+	return defaultresponses.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 }

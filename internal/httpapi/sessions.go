@@ -162,8 +162,12 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validRouteID(id) || rejectQuery(r) != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request")
+	if !validRouteID(id) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_session_id")
+		return
+	}
+	if rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "query_not_allowed")
 		return
 	}
 	body, ok := s.readJSONObject(w, r, mutationBodyLimit, false)
@@ -215,8 +219,12 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validRouteID(id) || rejectQuery(r) != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request")
+	if !validRouteID(id) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_session_id")
+		return
+	}
+	if rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "query_not_allowed")
 		return
 	}
 	body, ok := s.readJSONObject(w, r, mutationBodyLimit, true)
@@ -261,8 +269,12 @@ func (s *Server) handleForkSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validRouteID(id) || rejectQuery(r) != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request")
+	if !validRouteID(id) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_session_id")
+		return
+	}
+	if rejectQuery(r) != nil {
+		writeAPIError(w, http.StatusBadRequest, "query_not_allowed")
 		return
 	}
 	if s.rejectBody(w, r) {

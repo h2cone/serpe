@@ -45,10 +45,9 @@ const (
 
 // runStateMachine drives one run as a pull-based state machine. The phase
 // field is the state; step is the transition function. It owns the lock
-// protocol, Close, and the events published to the caller. Run policy
-// (terminal classification, tool choice, budgets, stall detection) lives in
-// policy.go and run_state.go; this type applies decisions, never re-derives
-// them.
+// protocol, Close, and the events published to the caller. Classification
+// lives in decideAfterModel; admission and quota live in toolExchangeAdmission;
+// this type applies those decisions.
 //
 // Lock protocol invariants:
 //   - mu guards every mutable field; runner, ctx, and cancel are immutable
@@ -225,7 +224,8 @@ func (s *runStateMachine) beginModelTurn() (*Event, bool, error) {
 		return nil, false, requestErr
 	}
 
-	limits := s.runner.modelStreamLimits()
+	remaining := s.runner.limits.MaxToolCalls - s.budget.toolCalls
+	limits := s.runner.modelStreamLimits(remaining)
 	var stream models.Stream
 	var err error
 	if acceptor, ok := s.runner.model.(models.StreamLimitAcceptor); ok {
@@ -353,9 +353,6 @@ func (s *runStateMachine) emitModelEnd() (*Event, bool, error) {
 	return newModelEndEvent(turn, resp), false, nil
 }
 
-// applyAfterModel applies the policy decision for the finished model turn:
-// commit the assistant turn, stop, or schedule tool execution. All business
-// decisions come from policy.decideAfterModel and runBudget.
 func (s *runStateMachine) applyAfterModel() error {
 	s.mu.Lock()
 	decision, err := decideAfterModel(s.record.lastResponse(), s.turnToolChoice)
@@ -363,96 +360,81 @@ func (s *runStateMachine) applyAfterModel() error {
 		s.mu.Unlock()
 		return err
 	}
-	if decision.action == afterModelComplete {
-		s.conversation.appendAssistant(decision.assistant)
-		s.record.setStopReason(StopCompleted)
-		s.phase = phaseRunEnd
+	switch decision.action {
+	case afterModelComplete, afterModelRefuse:
+		err := s.conversation.commitAssistant(decision.assistant)
+		if err == nil {
+			s.record.setStopReason(StopCompleted)
+			s.phase = phaseRunEnd
+		}
 		s.mu.Unlock()
-		return nil
+		return err
+	case afterModelAdmit:
+		admission, err := s.admitTools(decision)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if reason := s.budget.stopBeforeTools(len(decision.calls)); reason != "" {
+			s.record.setStopReason(reason)
+			s.phase = phaseRunEnd
+			s.mu.Unlock()
+			return nil
+		}
+		if err := s.ledger.accept(decision.calls); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.mu.Unlock()
+		return s.startAdmittedTools(decision, admission)
+	default:
+		s.mu.Unlock()
+		return fmt.Errorf("%w: unknown after-model action", ErrInvalidModelResponse)
 	}
+}
+
+func (s *runStateMachine) admitTools(decision afterModel) (toolAdmission, error) {
 	calls := decision.calls
-	if len(calls) > 1 && s.runner.capabilitiesKnown && !s.runner.capabilities.Has(models.CapabilityParallelTools) {
-		s.mu.Unlock()
-		return fmt.Errorf("%w: model returned parallel tool calls without capability", ErrInvalidModelResponse)
+	if len(calls) > 1 && s.runner.rejectParallel {
+		return toolAdmission{}, fmt.Errorf("%w: model returned parallel tool calls without capability", ErrInvalidModelResponse)
 	}
 	var argumentContextBytes int64
 	for i := range calls {
 		next, ok := safeAddBytes(argumentContextBytes, int64(len(calls[i].Arguments)))
 		if !ok || next > s.runner.limits.Context.MaxToolCallArgumentContextBytes {
-			s.mu.Unlock()
-			return fmt.Errorf("%w: current tool arguments exceed request context budget", ErrRunLimit)
+			return toolAdmission{}, fmt.Errorf("%w: current tool arguments exceed request context budget", ErrRunLimit)
 		}
 		argumentContextBytes = next
 	}
-	assistantBytes, err := sessionwire.MessageFragmentSize(decision.assistant)
-	if err != nil {
-		s.mu.Unlock()
-		return fmt.Errorf("%w: assistant message cannot be encoded", ErrInvalidModelResponse)
-	}
-	_, minimumResultBytes, err := minimumToolResultMessage(calls)
-	if err != nil {
-		s.mu.Unlock()
-		return fmt.Errorf("%w: cannot frame tool results", ErrInvalidModelResponse)
-	}
-	fixedReserve, ok := safeAddBytes(minimumResultBytes, int64(len(calls))*(1<<10))
-	if !ok || fixedReserve > s.runner.limits.MaxSessionMessageJSONBytes {
-		s.mu.Unlock()
-		return fmt.Errorf("%w: tool result message cannot fit session message ceiling", ErrRunLimit)
-	}
 	retainedRemaining, canonicalRemaining := s.budget.remainingToolBytes()
-	minimumGroup, ok := safeAddBytes(assistantBytes, fixedReserve)
-	if !ok || minimumGroup > retainedRemaining || minimumGroup > canonicalRemaining {
-		s.mu.Unlock()
-		return fmt.Errorf("%w: tool exchange cannot fit remaining run budget", ErrRunLimit)
-	}
-	if err := s.ledger.accept(calls); err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	if reason := s.budget.stopBeforeTools(len(calls)); reason != "" {
-		s.conversation.appendAssistant(decision.assistant)
-		s.record.setStopReason(reason)
-		s.phase = phaseRunEnd
-		s.mu.Unlock()
-		return nil
-	}
-	s.mu.Unlock()
+	return toolExchangeAdmission(calls, decision.assistant, s.runner.limits.MaxSessionMessageJSONBytes, retainedRemaining, canonicalRemaining)
+}
 
+func (s *runStateMachine) startAdmittedTools(decision afterModel, admission toolAdmission) error {
 	if s.runner.tools == nil {
 		return fmt.Errorf("%w: model returned tool calls but no executor is configured", ErrInvalidModelResponse)
 	}
 	_, executorOutput := s.runner.tools.Limits()
-	rawQuota := (s.runner.limits.MaxSessionMessageJSONBytes - fixedReserve) / 6
-	if remaining := retainedRemaining - minimumGroup; rawQuota > remaining {
-		rawQuota = remaining
-	}
-	if remaining := canonicalRemaining - minimumGroup; rawQuota > remaining {
-		rawQuota = remaining
-	}
-	if rawQuota > executorOutput.MaxBatchFramedBytes {
-		rawQuota = executorOutput.MaxBatchFramedBytes
-	}
-	minimumRaw := int64(len(calls)) * (1 << 10)
+	admission.clampTo(executorOutput.MaxBatchFramedBytes)
+	minimumRaw := minimumRawQuota(len(decision.calls))
 	if s.runner.requestBudget != nil {
 		nextChoice := resolveToolChoice(s.conversation.toolChoice(), s.budget.completedToolBatches()+1)
-		skeleton := providerSkeletonToolResultMessage(calls)
+		skeleton := providerSkeletonToolResultMessage(decision.calls)
 		_, skeletonSize, projectionErr := s.runner.prepareModelRequest(s.ctx, s.conversation, nextChoice, decision.assistant, skeleton)
 		if projectionErr != nil {
 			return projectionErr
 		}
 		headroom := s.runner.maxEncodedRequestBytes - skeletonSize
-		providerQuota, ok := safeAddBytes(minimumRaw, headroom/6)
+		providerQuota, ok := safeAddBytes(minimumRaw, headroom/rawQuotaDivisor)
 		if !ok {
 			return fmt.Errorf("%w: provider continuation quota overflow", ErrRunLimit)
 		}
-		if rawQuota > providerQuota {
-			rawQuota = providerQuota
-		}
+		admission.clampTo(providerQuota)
 	}
-	if rawQuota < minimumRaw {
+	if admission.quota < minimumRaw {
 		return fmt.Errorf("%w: insufficient quota for fixed tool results", ErrRunLimit)
 	}
-	batch, err := s.runner.tools.Start(s.ctx, calls, tools.WithMaxBatchFramedBytes(rawQuota))
+	batch, err := s.runner.tools.Start(s.ctx, decision.calls, tools.WithMaxBatchFramedBytes(admission.quota))
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
@@ -460,11 +442,11 @@ func (s *runStateMachine) applyAfterModel() error {
 		return fmt.Errorf("%w: %v", ErrToolExecution, err)
 	}
 	s.mu.Lock()
-	s.conversation.appendAssistant(decision.assistant)
 	s.batch = toolBatchHandle{
-		batch: batch, calls: append([]models.ToolCall(nil), calls...),
-		adapted: make([]tools.Output, len(calls)), adaptedSet: make([]bool, len(calls)),
-		assistantBytes: assistantBytes,
+		batch: batch, calls: append([]models.ToolCall(nil), decision.calls...),
+		adapted: make([]tools.Output, len(decision.calls)), adaptedSet: make([]bool, len(decision.calls)),
+		assistantBytes: admission.assistantBytes,
+		pending:        pendingExchange{assistant: decision.assistant},
 	}
 	s.phase = phaseToolDrain
 	s.mu.Unlock()
@@ -577,7 +559,6 @@ func (s *runStateMachine) commitCompletedTools() error {
 		s.batch.contents = append(s.batch.contents, content)
 		s.batch.results = append(s.batch.results, adapted)
 		s.record.appendToolOutput(content)
-		s.budget.recordToolCall()
 	}
 	return nil
 }
@@ -602,8 +583,7 @@ func (s *runStateMachine) finishToolBatch() error {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: tool exchange size overflow", ErrRunLimit)
 	}
-	assistant := s.conversation.messages[len(s.conversation.messages)-1]
-	canonical, err := canonicalToolExchangeBytes(assistant, resultMessage)
+	canonical, err := canonicalToolExchangeBytes(s.batch.pending.assistant, resultMessage)
 	if err != nil {
 		s.mu.Unlock()
 		return err
@@ -619,8 +599,9 @@ func (s *runStateMachine) finishToolBatch() error {
 		return err
 	}
 	nextChoice := resolveToolChoice(s.conversation.toolChoice(), s.budget.completedToolBatches()+1)
+	assistant := s.batch.pending.assistant
 	s.mu.Unlock()
-	_, _, projectionErr := s.runner.prepareModelRequest(s.ctx, s.conversation, nextChoice, resultMessage)
+	_, _, projectionErr := s.runner.prepareModelRequest(s.ctx, s.conversation, nextChoice, assistant, resultMessage)
 	if projectionErr != nil {
 		return projectionErr
 	}
@@ -631,10 +612,13 @@ func (s *runStateMachine) finishToolBatch() error {
 		return err
 	}
 	s.budget.recordToolBytes(retained, canonical)
-
-	// Append one user message with all canonical tool results. conversation is
-	// the only owner that mutates the transcript.
-	s.conversation.messages = append(s.conversation.messages, resultMessage)
+	s.batch.pending.results = append([]models.Content(nil), s.batch.contents...)
+	if err := s.conversation.commitExchange(s.batch.pending); err != nil {
+		return err
+	}
+	for range s.batch.contents {
+		s.budget.recordToolCall()
+	}
 
 	if s.budget.recordStep(fp) {
 		s.record.setStopReason(StopStalled)

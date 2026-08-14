@@ -43,10 +43,10 @@ func TestRunOutcomeErrorContract(t *testing.T) {
 		{
 			name: "max tool calls",
 			run: func() (*loops.Result, error) {
-				model := &scriptedModel{responses: []*models.Response{toolCallResponse(
-					models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)},
-					models.ToolCall{ID: "2", Name: "f", Arguments: json.RawMessage(`{}`)},
-				)}}
+				model := &scriptedModel{responses: []*models.Response{
+					toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
+					toolCallResponse(models.ToolCall{ID: "2", Name: "f", Arguments: json.RawMessage(`{}`)}),
+				}}
 				runner, _ := loops.New(loops.Config{Model: model, Tools: mustTools(t, newStubTool("f", nil)), Limits: loops.Limits{MaxToolCalls: 1}})
 				return runner.Run(context.Background(), userReq("go"))
 			},

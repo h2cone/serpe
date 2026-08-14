@@ -53,7 +53,7 @@ func TestConfigAndModelValidation(t *testing.T) {
 		{name: "auth conflict", config: providers.Config{Protocol: providers.OpenAIResponses, APIKey: "key", Authenticator: providers.AuthenticatorFunc(func(_ context.Context, _ *http.Request) error { return nil })}},
 		{name: "base query", config: providers.Config{Protocol: providers.OpenAIResponses, BaseURL: "https://example.test?override=1"}},
 		{name: "reserved header", config: providers.Config{Protocol: providers.OpenAIResponses, Headers: http.Header{"Authorization": []string{"bad"}}}},
-		{name: "negative limit", config: providers.Config{Protocol: providers.OpenAIResponses, Limits: providers.Limits{MaxSSEEventBytes: -1}}},
+		{name: "negative limit", config: providers.Config{Protocol: providers.OpenAIResponses, Limits: providers.TransportLimits{MaxSSEEventBytes: -1}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

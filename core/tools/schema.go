@@ -136,12 +136,7 @@ func (c *schemaCompiler) walkKeyword(parent, key string, val jsonvalue.Value, de
 	case "$id", "$anchor", "$dynamicAnchor", "$dynamicRef", "$vocabulary":
 		return fmt.Errorf("schema: keyword %q is not supported", key)
 	case "$ref":
-		if val.Kind != jsonvalue.KindString {
-			return fmt.Errorf("schema: $ref must be a string")
-		}
-		if err := validateLocalRef(val.String); err != nil {
-			return err
-		}
+		return fmt.Errorf("schema: keyword %q is not supported", key)
 	case "$defs", "properties":
 		if val.Kind != jsonvalue.KindObject {
 			return fmt.Errorf("schema: %s must be an object", key)
@@ -206,24 +201,8 @@ func (c *schemaCompiler) compileBody(ptr string, val jsonvalue.Value, depth int)
 	if val.Kind != jsonvalue.KindObject {
 		return nil, fmt.Errorf("schema: expected a schema object at %s", ptr)
 	}
-	if ref, ok := val.Lookup("$ref"); ok {
-		for _, member := range val.Object {
-			if member.Key == "$ref" {
-				continue
-			}
-			if annotationKeyword(member.Key) {
-				if err := validateAnnotation(member.Key, member.Value); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			return nil, fmt.Errorf("schema: $ref may only have annotation siblings")
-		}
-		target, err := c.resolveRef(ref.String)
-		if err != nil {
-			return nil, err
-		}
-		return c.compile(target.ptr, target.value, depth+1)
+	if _, ok := val.Lookup("$ref"); ok {
+		return nil, fmt.Errorf("schema: keyword %q is not supported", "$ref")
 	}
 	out := &compiledSchema{properties: map[string]*compiledSchema{}}
 	for _, m := range val.Object {
@@ -517,61 +496,6 @@ func scalarEqualityKey(value jsonvalue.Value) (string, error) {
 	return fmt.Sprintf("%d:%s", value.Kind, raw), nil
 }
 
-func (c *schemaCompiler) resolveRef(ref string) (*schemaNode, error) {
-	if err := validateLocalRef(ref); err != nil {
-		return nil, err
-	}
-	ptr := ref
-	if ptr == "#" {
-		ptr = "#"
-	}
-	node, ok := c.nodes[ptr]
-	if !ok || !node.schema {
-		return nil, fmt.Errorf("schema: $ref %q does not target a schema node", ref)
-	}
-	return node, nil
-}
-
-func validateLocalRef(ref string) error {
-	if ref == "#" {
-		return nil
-	}
-	if !strings.HasPrefix(ref, "#/") {
-		return fmt.Errorf("schema: $ref must be a same-document pointer")
-	}
-	for _, seg := range strings.Split(ref[2:], "/") {
-		decoded, err := decodePointerSegment(seg)
-		if err != nil {
-			return err
-		}
-		_ = decoded
-	}
-	return nil
-}
-
-func decodePointerSegment(seg string) (string, error) {
-	if strings.Contains(seg, "%") {
-		return "", fmt.Errorf("schema: $ref must not use percent-encoding")
-	}
-	var b strings.Builder
-	for i := 0; i < len(seg); i++ {
-		if seg[i] != '~' {
-			b.WriteByte(seg[i])
-			continue
-		}
-		if i+1 >= len(seg) || (seg[i+1] != '0' && seg[i+1] != '1') {
-			return "", fmt.Errorf("schema: invalid JSON pointer escape")
-		}
-		if seg[i+1] == '0' {
-			b.WriteByte('~')
-		} else {
-			b.WriteByte('/')
-		}
-		i++
-	}
-	return b.String(), nil
-}
-
 func escapePointer(s string) string {
 	s = strings.ReplaceAll(s, "~", "~0")
 	return strings.ReplaceAll(s, "/", "~1")
@@ -734,11 +658,6 @@ func (s *compiledSchema) validateString(ctx context.Context, inst jsonvalue.Valu
 	if err := b.addScan(int64(len(inst.String))); err != nil {
 		return err
 	}
-	for off := 0; off < len(inst.String); off += 64 << 10 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
 	n := utf8.RuneCountInString(inst.String)
 	if s.minLength != nil && n < *s.minLength {
 		return fmt.Errorf("schema: string is shorter than minLength")
@@ -839,12 +758,6 @@ func (b *evalBudget) step() error {
 		return fmt.Errorf("schema evaluation budget exceeded")
 	}
 	b.steps++
-	if b.steps > maxEvalSteps {
-		return fmt.Errorf("schema evaluation budget exceeded")
-	}
-	if b.steps%4096 == 0 {
-		return nil
-	}
 	return nil
 }
 

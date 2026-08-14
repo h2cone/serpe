@@ -89,16 +89,11 @@ func parseEditArguments(in tools.Invocation, inputLimit int64) (editArguments, e
 }
 
 func (t editTool) Execute(ctx context.Context, in tools.Invocation) (tools.Output, error) {
-	args, err := parseEditArguments(in, t.set.lim.MaxWriteBytes)
+	act, err := t.Activate(ctx, in)
 	if err != nil {
 		return tools.Output{}, err
 	}
-	target, err := t.set.resolveTarget(ctx, in, args.path, targetEdit)
-	if err != nil {
-		return pathFail(err)
-	}
-	defer target.close()
-	return t.executeResolved(ctx, in, target)
+	return executeActivated(ctx, act)
 }
 
 func (t editTool) executeResolved(ctx context.Context, in tools.Invocation, target *resolvedTarget) (tools.Output, error) {

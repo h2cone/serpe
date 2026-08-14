@@ -116,51 +116,54 @@ func TestManagerRejectsRecordKeyMismatch(t *testing.T) {
 	}
 }
 
-func TestSetCWDAndSetMetadata(t *testing.T) {
+func TestPatchCWDAndMetadata(t *testing.T) {
 	m := mustManager(t, NewMemoryStore())
 	ctx := context.Background()
 	if _, err := m.Create(ctx, New("s1", testCWD("wd"))); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.SetCWD(ctx, "s1", testCWD("new"))
+	newCWD := testCWD("new")
+	got, err := m.Patch(ctx, "s1", SessionPatch{CWD: &newCWD})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CWD != testCWD("new") {
+	if got.CWD != newCWD {
 		t.Fatalf("CWD = %q", got.CWD)
 	}
 	if got.UpdatedAt.Before(got.CreatedAt) {
 		t.Fatalf("UpdatedAt went backwards: %v", got.UpdatedAt)
 	}
-	if _, err := m.SetCWD(ctx, "s1", "  "); !errors.Is(err, ErrInvalidSession) {
+	blank := "  "
+	if _, err := m.Patch(ctx, "s1", SessionPatch{CWD: &blank}); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("blank CWD = %v", err)
 	}
-	got, err = m.SetMetadata(ctx, "s1", map[string]string{"title": "t", "owner": "u"})
+	title, owner := "t", "u"
+	got, err = m.Patch(ctx, "s1", SessionPatch{Metadata: map[string]*string{"title": &title, "owner": &owner}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Metadata["title"] != "t" || got.Metadata["owner"] != "u" {
 		t.Fatalf("metadata = %+v", got.Metadata)
 	}
-	// Caller may mutate the input map after SetMetadata.
-	in := map[string]string{"title": "x"}
-	got, err = m.SetMetadata(ctx, "s1", in)
+	next := "x"
+	in := map[string]*string{"title": &next}
+	got, err = m.Patch(ctx, "s1", SessionPatch{Metadata: in})
 	if err != nil {
 		t.Fatal(err)
 	}
-	in["title"] = "mut"
+	next = "mut"
 	again, _ := m.Get(ctx, "s1")
 	if again.Metadata["title"] != "x" {
-		t.Fatal("SetMetadata must copy metadata")
+		t.Fatal("Patch must copy metadata values")
 	}
-	got, err = m.SetMetadata(ctx, "s1", nil)
-	if err != nil {
+	if _, err := m.Patch(ctx, "s1", SessionPatch{Metadata: map[string]*string{"title": nil, "owner": nil}}); err != nil {
 		t.Fatal(err)
 	}
+	got, _ = m.Get(ctx, "s1")
 	if got.Metadata != nil {
 		t.Fatalf("clear metadata: %+v", got.Metadata)
 	}
-	if _, err := m.SetMetadata(ctx, "s1", map[string]string{"bad key": "v"}); !errors.Is(err, ErrInvalidSession) {
+	if _, err := m.Patch(ctx, "s1", SessionPatch{Metadata: map[string]*string{"bad key": nil}}); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("bad metadata key = %v", err)
 	}
 	_ = again
@@ -184,7 +187,7 @@ func TestPatchMetadataPreservesConcurrentKeys(t *testing.T) {
 			<-start
 			key := fmt.Sprintf("key-%d", i)
 			value := fmt.Sprintf("value-%d", i)
-			_, err := m.PatchMetadata(ctx, "s1", map[string]*string{key: &value})
+			_, err := m.Patch(ctx, "s1", SessionPatch{Metadata: map[string]*string{key: &value}})
 			errs <- err
 		}(i)
 	}
@@ -211,14 +214,14 @@ func TestPatchMetadataPreservesConcurrentKeys(t *testing.T) {
 		}
 	}
 
-	if _, err := m.PatchMetadata(ctx, "s1", map[string]*string{"key-0": nil}); err != nil {
+	if _, err := m.Patch(ctx, "s1", SessionPatch{Metadata: map[string]*string{"key-0": nil}}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = m.Get(ctx, "s1")
 	if _, ok := got.Metadata["key-0"]; ok {
 		t.Fatal("nil patch did not delete key-0")
 	}
-	if _, err := m.PatchMetadata(ctx, "s1", map[string]*string{"bad key": nil}); !errors.Is(err, ErrInvalidSession) {
+	if _, err := m.Patch(ctx, "s1", SessionPatch{Metadata: map[string]*string{"bad key": nil}}); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("invalid patch key = %v, want ErrInvalidSession", err)
 	}
 }
@@ -231,8 +234,9 @@ func TestIntentWriteStoreFailureRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.failSave = true
-	if _, err := m.SetCWD(ctx, "s1", "/mutated"); err == nil {
-		t.Fatal("SetCWD succeeded despite failing store")
+	mutated := "/mutated"
+	if _, err := m.Patch(ctx, "s1", SessionPatch{CWD: &mutated}); err == nil {
+		t.Fatal("Patch succeeded despite failing store")
 	}
 	got, _ := m.Get(ctx, "s1")
 	if got.CWD != testCWD("wd") {

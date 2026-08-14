@@ -348,13 +348,38 @@ func TestMaxModelTurns(t *testing.T) {
 	}
 }
 
-func TestMaxToolCalls(t *testing.T) {
+func TestMaxToolCallsTurnEnvelope(t *testing.T) {
 	t.Parallel()
 	model := &scriptedModel{responses: []*models.Response{
 		toolCallResponse(
 			models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)},
 			models.ToolCall{ID: "2", Name: "f", Arguments: json.RawMessage(`{}`)},
 		),
+	}}
+	var execs int32
+	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (tools.Output, error) {
+		atomic.AddInt32(&execs, 1)
+		return tools.Text("ok"), nil
+	})
+	r, _ := loops.New(loops.Config{
+		Model:  model,
+		Tools:  mustTools(t, tool),
+		Limits: loops.Limits{MaxToolCalls: 1},
+	})
+	_, err := r.Run(context.Background(), userReq("go"))
+	if err == nil || !errors.Is(err, loops.ErrInvalidModelResponse) {
+		t.Fatalf("err=%v", err)
+	}
+	if atomic.LoadInt32(&execs) != 0 {
+		t.Fatal("over-budget turn must not execute tools")
+	}
+}
+
+func TestMaxToolCalls(t *testing.T) {
+	t.Parallel()
+	model := &scriptedModel{responses: []*models.Response{
+		toolCallResponse(models.ToolCall{ID: "1", Name: "f", Arguments: json.RawMessage(`{}`)}),
+		toolCallResponse(models.ToolCall{ID: "2", Name: "f", Arguments: json.RawMessage(`{}`)}),
 	}}
 	var execs int32
 	tool := newStubTool("f", func(_ context.Context, _ json.RawMessage) (tools.Output, error) {
@@ -373,8 +398,8 @@ func TestMaxToolCalls(t *testing.T) {
 	if result.StopReason != loops.StopMaxToolCalls {
 		t.Fatalf("stop=%s", result.StopReason)
 	}
-	if atomic.LoadInt32(&execs) != 0 {
-		t.Fatal("preflight must skip entire batch")
+	if atomic.LoadInt32(&execs) != 1 {
+		t.Fatalf("execs=%d want 1", execs)
 	}
 }
 

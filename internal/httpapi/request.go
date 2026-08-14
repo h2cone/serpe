@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/h2cone/serpe/internal/jsonvalue"
+	"github.com/h2cone/serpe/internal/workdir"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
@@ -222,7 +223,7 @@ func (s *Server) normalizeWorkingDir(ctx context.Context, value string, present 
 		value = filepath.Join(s.cwd, value)
 	}
 	value = filepath.Clean(value)
-	if err := validateDirectory(ctx, value); err != nil {
+	if err := workdir.Check(ctx, value); err != nil {
 		return "", err
 	}
 	return value, nil

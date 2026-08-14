@@ -48,6 +48,56 @@ func canonicalToolExchangeBytes(assistant, result models.Message) (int64, error)
 	return left + right + providerBytes + 32, nil
 }
 
+const (
+	perCallRawReserve = 1 << 10
+	rawQuotaDivisor   = 6
+)
+
+type toolAdmission struct {
+	quota          int64
+	reserved       int64
+	assistantBytes int64
+	minimumGroup   int64
+}
+
+func toolExchangeAdmission(calls []models.ToolCall, assistant models.Message, sessionCeiling, retainedRemaining, canonicalRemaining int64) (toolAdmission, error) {
+	assistantBytes, err := sessionwire.MessageFragmentSize(assistant)
+	if err != nil {
+		return toolAdmission{}, fmt.Errorf("%w: assistant message cannot be encoded", ErrInvalidModelResponse)
+	}
+	_, minimumResultBytes, err := minimumToolResultMessage(calls)
+	if err != nil {
+		return toolAdmission{}, fmt.Errorf("%w: cannot frame tool results", ErrInvalidModelResponse)
+	}
+	fixedReserve, ok := safeAddBytes(minimumResultBytes, int64(len(calls))*perCallRawReserve)
+	if !ok || fixedReserve > sessionCeiling {
+		return toolAdmission{}, fmt.Errorf("%w: tool result message cannot fit session message ceiling", ErrRunLimit)
+	}
+	minimumGroup, ok := safeAddBytes(assistantBytes, fixedReserve)
+	if !ok || minimumGroup > retainedRemaining || minimumGroup > canonicalRemaining {
+		return toolAdmission{}, fmt.Errorf("%w: tool exchange cannot fit remaining run budget", ErrRunLimit)
+	}
+	rawQuota := (sessionCeiling - fixedReserve) / rawQuotaDivisor
+	if remaining := retainedRemaining - minimumGroup; rawQuota > remaining {
+		rawQuota = remaining
+	}
+	if remaining := canonicalRemaining - minimumGroup; rawQuota > remaining {
+		rawQuota = remaining
+	}
+	return toolAdmission{
+		quota: rawQuota, reserved: fixedReserve,
+		assistantBytes: assistantBytes, minimumGroup: minimumGroup,
+	}, nil
+}
+
+func (a *toolAdmission) clampTo(ceiling int64) {
+	if ceiling > 0 && a.quota > ceiling {
+		a.quota = ceiling
+	}
+}
+
+func minimumRawQuota(calls int) int64 { return int64(calls) * perCallRawReserve }
+
 func minimumToolResultMessage(calls []models.ToolCall) (models.Message, int64, error) {
 	contents := make([]models.Content, len(calls))
 	for i := range calls {
@@ -63,7 +113,7 @@ func minimumToolResultMessage(calls []models.ToolCall) (models.Message, int64, e
 
 func providerSkeletonToolResultMessage(calls []models.ToolCall) models.Message {
 	contents := make([]models.Content, len(calls))
-	body := strings.Repeat("x", 1<<10)
+	body := strings.Repeat("x", perCallRawReserve)
 	for i := range calls {
 		contents[i] = models.ToolResultContent(calls[i].ID, calls[i].Name, true, models.Text(body))
 	}

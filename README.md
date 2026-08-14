@@ -268,7 +268,7 @@ defer func() { _ = manager.Close() }()
 
 - IDs: 1–128 ASCII `[A-Za-z0-9._-]`; `.`, `..`, and Windows reserved device names are rejected.
 - Custom `Store`s persist opaque `[]byte` records keyed by ID and never decode `Session`; `Manager` owns validation and the versioned payload.
-- Mutations are intent-specific (`SetCWD`, `PatchMetadata`, `Append`, `AppendAt`) — there is no generic `Update`.
+- Mutations are intent-specific (`Patch`, `Append`, `AppendAt`) — there is no generic `Update`.
 - A successful `NewManager` exclusively owns the Store until idempotent `Manager.Close`; if construction fails, the caller still owns and closes it.
 - `FileStore` accepts one active opener, pins child access to the validated root
   directory handle, rejects links/reparse points and broad permissions, and

@@ -8,13 +8,12 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/h2cone/serpe/compose"
+	"github.com/h2cone/serpe/internal/workdir"
 	"github.com/h2cone/serpe/runtime/loops"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
@@ -98,7 +97,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: cursor entropy: %w", err)
 	}
-	if err := validateDirectory(context.Background(), cfg.CWD); err != nil {
+	if err := workdir.Check(context.Background(), cfg.CWD); err != nil {
 		return nil, fmt.Errorf("httpapi: invalid startup CWD: %w", err)
 	}
 	turns, err := compose.New(compose.Config{Runner: cfg.Runner, Manager: cfg.Manager})
@@ -258,21 +257,4 @@ func normalizeHTTPTimeout(value time.Duration, name string) (time.Duration, erro
 		return 0, fmt.Errorf("httpapi: %s must be between 5 seconds and 2 minutes", name)
 	}
 	return value, nil
-}
-
-func validateDirectory(ctx context.Context, cwd string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if cwd == "" || len(cwd) > 32<<10 || !filepath.IsAbs(cwd) || strings.IndexByte(cwd, 0) >= 0 {
-		return fmt.Errorf("working directory must be a bounded absolute path")
-	}
-	info, err := os.Stat(cwd)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("working directory is not a directory")
-	}
-	return ctx.Err()
 }

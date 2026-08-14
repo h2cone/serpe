@@ -18,11 +18,11 @@ func NewAnthropicMessages(config shared.Config) *Provider {
 		Encode: func(modelID string, req *models.Request, stream bool, config shared.Config) ([]byte, error) {
 			return anthropic.EncodeRequest(modelID, req, stream, config.Policy.LenientMapping, config.Limits.MaxProviderStateBytes)
 		},
-		Decode: func(raw []byte, requestID, _ string, config shared.Config) (*models.Response, error) {
-			return anthropic.DecodeResponseJSONWithLimits(raw, requestID, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
+		Decode: func(raw []byte, requestID, _ string, config shared.Config, limits models.StreamLimits) (*models.Response, error) {
+			return anthropic.DecodeResponseJSONWithLimits(raw, requestID, config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 		},
 		NewSource: func(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
-			return anthropic.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, limits))
+			return anthropic.NewSSEStreamSource(reader, requestID, modelID, config.Policy.IgnoreUnknownEvent, config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 		},
 	})
 }

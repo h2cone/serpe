@@ -55,7 +55,7 @@ func TestResponseAndSSELimits(t *testing.T) {
 				defer server.Close()
 				model := boundTestModel(t, providers.OpenAIResponses, server, "model-1", providers.Config{
 					Driver: driver,
-					Limits: providers.Limits{MaxResponseBytes: 32},
+					Limits: providers.TransportLimits{MaxResponseBytes: 32},
 				})
 				_, err := model.Complete(context.Background(), models.NewTextRequest("hello"))
 				var modelErr *models.Error
@@ -76,7 +76,7 @@ func TestResponseAndSSELimits(t *testing.T) {
 				defer server.Close()
 				model := boundTestModel(t, providers.OpenAIChatCompletions, server, "model-1", providers.Config{
 					Driver: driver,
-					Limits: providers.Limits{MaxSSEEventBytes: 32},
+					Limits: providers.TransportLimits{MaxSSEEventBytes: 32},
 				})
 				stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
 				if err != nil {
@@ -112,7 +112,7 @@ func TestSSELimitResetsAcrossCRLFEvents(t *testing.T) {
 			defer server.Close()
 			model := boundTestModel(t, providers.OpenAIChatCompletions, server, "model-1", providers.Config{
 				Driver: driver,
-				Limits: providers.Limits{MaxSSEEventBytes: 128},
+				Limits: providers.TransportLimits{MaxSSEEventBytes: 128},
 			})
 			stream, err := model.Stream(context.Background(), models.NewTextRequest("hello"))
 			if err != nil {

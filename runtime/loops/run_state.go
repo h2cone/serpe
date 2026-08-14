@@ -159,6 +159,7 @@ type toolBatchHandle struct {
 	results        []tools.Output
 	contents       []models.Content
 	assistantBytes int64
+	pending        pendingExchange
 }
 
 func (h *toolBatchHandle) close() error {

@@ -102,6 +102,10 @@ func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *m
 }
 
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
+	return m.CompleteWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) CompleteWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "google", "generate"); err != nil {
 		return nil, err
 	}
@@ -134,11 +138,11 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 			Code: "missing_response_body", Message: "official Gemini SDK returned no response body",
 		}
 	}
-	decoded, err := defaultgoogle.DecodeResponseJSONWithLimits(raw, requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(m.provider.config.Limits, models.StreamLimits{}))
+	decoded, err := defaultgoogle.DecodeResponseJSONWithLimits(raw, requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 	if err != nil {
 		return nil, err
 	}
-	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, limits)
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
@@ -188,7 +192,7 @@ func (m *upstreamModel) StreamWithLimits(ctx context.Context, req *models.Reques
 			cancel()
 			return nil
 		}), requestID, m.modelID, m.provider.config.Limits.MaxProviderStateBytes,
-		shared.EffectiveToolCallLimits(m.provider.config.Limits, limits))
+		shared.ToolCallLimitsFromStream(limits))
 	return models.NewStream(ctx, source,
 		models.WithStreamProvider("google"),
 		models.WithStreamLimits(limits)), nil

@@ -3,9 +3,11 @@ package sessions
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
 // schemaVersion is the Manager-owned record format version. Bump when the
@@ -153,4 +155,44 @@ func decodeMessage(m recordMessage) (models.Message, error) {
 		}
 	}
 	return out, nil
+}
+
+func migrateRecord(data []byte, filenameID, cwdBase string) ([]byte, bool, error) {
+	if _, err := jsonvalue.Parse(data, jsonvalue.Limits{MaxDepth: 128, MaxNodes: 1_048_576, MaxNumberBytes: 128, MaxExponent: 1_000, MaxScale: 1_024}); err != nil {
+		return nil, false, fmt.Errorf("%w: record is not strict JSON: %v", ErrInvalidSession, err)
+	}
+	var raw sessionRecord
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, false, fmt.Errorf("%w: decode legacy record: %v", ErrInvalidSession, err)
+	}
+	if raw.SchemaVersion != schemaVersion || raw.ID != filenameID {
+		return nil, false, fmt.Errorf("%w: filename ID and record ID/schema do not match", ErrInvalidSession)
+	}
+	cwdChanged := false
+	if !filepath.IsAbs(raw.CWD) {
+		if raw.CWD == "" || filepath.VolumeName(raw.CWD) != "" {
+			return nil, false, fmt.Errorf("%w: legacy CWD is not a portable relative path", ErrInvalidSession)
+		}
+		raw.CWD = filepath.Clean(filepath.Join(cwdBase, raw.CWD))
+		cwdChanged = true
+	}
+	session := &Session{ID: raw.ID, ParentID: raw.ParentID, CWD: raw.CWD, CreatedAt: raw.CreatedAt.UTC(), UpdatedAt: raw.UpdatedAt.UTC(), Messages: make([]models.Message, len(raw.Messages))}
+	for index := range raw.Messages {
+		message, err := decodeMessage(raw.Messages[index])
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: message %d: %v", ErrInvalidSession, index, err)
+		}
+		session.Messages[index] = message
+	}
+	if len(raw.Metadata) > 0 {
+		session.Metadata = make(map[string]string, len(raw.Metadata))
+		for key, value := range raw.Metadata {
+			session.Metadata[key] = value
+		}
+	}
+	if err := session.Validate(); err != nil {
+		return nil, false, err
+	}
+	migrated, err := marshalSession(session)
+	return migrated, cwdChanged, err
 }
