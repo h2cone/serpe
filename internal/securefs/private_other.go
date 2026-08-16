@@ -1,7 +1,7 @@
 //go:build !aix && !darwin && !dragonfly && !freebsd && !linux && !netbsd && !openbsd && !solaris && !windows
 
 // Package securefs centralizes private-file ownership and access checks used
-// by persistent stores and server secrets.
+// by FileStore.
 package securefs
 
 import (

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/h2cone/serpe/core/models"
@@ -16,7 +15,7 @@ import (
 
 func TestNewDefaultNames(t *testing.T) {
 	t.Parallel()
-	set, err := builtin.NewDefault(builtin.Config{})
+	set, err := builtin.NewDefault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +38,7 @@ func TestNewDefaultNames(t *testing.T) {
 func TestFileToolsRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	set, err := builtin.NewDefault(builtin.Config{WorkspaceRoots: []string{dir}})
+	set, err := builtin.NewDefault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +75,7 @@ func TestFileToolsRoundTrip(t *testing.T) {
 func TestPathEscapeRejected(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	set, err := builtin.NewDefault(builtin.Config{})
+	set, err := builtin.NewDefault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,31 +92,28 @@ func TestPathEscapeRejected(t *testing.T) {
 
 func TestRelativeWorkingDirRejected(t *testing.T) {
 	t.Parallel()
-	set, err := builtin.NewDefault(builtin.Config{})
+	dir := t.TempDir()
+	set, err := builtin.NewDefault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := set.ValidateWorkingDir(context.Background(), "relative"); err == nil {
-		t.Fatal("relative CWD")
+	exec, err := tools.New(tools.Config{}, set.Tools()[0]) // read
+	if err != nil {
+		t.Fatal(err)
 	}
-	if runtime.GOOS == "windows" {
-		if err := set.ValidateWorkingDir(context.Background(), `C:foo`); err == nil {
-			t.Fatal("drive-relative CWD")
-		}
+	ctx := tools.WithScope(context.Background(), tools.Scope{WorkingDir: filepath.Base(dir)})
+	out := call(t, exec, ctx, "read", map[string]any{"path": "a.txt"})
+	if !out.IsError {
+		t.Fatalf("expected relative CWD rejection: %+v", out)
 	}
 }
 
 func TestBashEcho(t *testing.T) {
-	bashPath, err := exec.LookPath("bash")
-	if err != nil {
+	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not on PATH")
 	}
-	bashPath, err = filepath.Abs(bashPath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
-	set, err := builtin.NewDefault(builtin.Config{BashPath: bashPath})
+	set, err := builtin.NewDefault()
 	if err != nil {
 		t.Fatal(err)
 	}

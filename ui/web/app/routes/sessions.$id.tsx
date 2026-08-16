@@ -3,42 +3,26 @@ import type { Route } from "./+types/sessions.$id";
 import { ChatView } from "~/components/chat-view";
 import { TrashIcon } from "~/components/icons";
 import { api } from "~/lib/api";
-import { isAuthRequired } from "~/lib/auth";
 import type { SessionSummary } from "~/lib/wire";
 
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   const id = params.id!;
-  try {
-    // Single GET: split meta/messages in-process (no dual full-detail fetch).
-    const session = await api.getSession(id);
-    const {
-      messages,
-      message_start,
-      snapshot_length,
-      next_before,
-      ...meta
-    } = session;
-    return {
-      meta,
-      messages,
-      messageStart: message_start,
-      snapshotLength: snapshot_length,
-      nextBefore: next_before,
-    };
-  } catch (error) {
-    // The layout renders the in-memory credential gate. Avoid turning an
-    // expected pre-auth client load into the root error boundary.
-    if (isAuthRequired(error)) {
-      return {
-        meta: null,
-        messages: [],
-        messageStart: 0,
-        snapshotLength: 0,
-        nextBefore: undefined,
-      };
-    }
-    throw error;
-  }
+  // Single GET: split meta/messages in-process (no dual full-detail fetch).
+  const session = await api.getSession(id);
+  const {
+    messages,
+    message_start,
+    snapshot_length,
+    next_before,
+    ...meta
+  } = session;
+  return {
+    meta,
+    messages,
+    messageStart: message_start,
+    snapshotLength: snapshot_length,
+    nextBefore: next_before,
+  };
 }
 
 export async function clientAction({ request, params }: Route.ClientActionArgs) {

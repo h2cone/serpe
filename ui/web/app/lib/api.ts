@@ -1,9 +1,5 @@
 import { apiOrigin } from "../../api-origin";
 import {
-  authorizationHeader,
-  rejectAPIToken,
-} from "./auth";
-import {
   decodeSessionDetail,
   decodeSessionMutation,
   decodeSessionSummaries,
@@ -25,7 +21,6 @@ async function json<T>(
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
-  headers.set("Authorization", authorizationHeader());
   if (init?.body !== undefined) {
     headers.set("Content-Type", "application/json");
   }
@@ -37,7 +32,6 @@ async function json<T>(
     redirect: "error",
   });
   if (!res.ok) {
-    if (res.status === 401) rejectAPIToken();
     throw new APIError(res.status, responseProblem(res.status));
   }
   if (res.status === 204) return undefined as T;
@@ -55,8 +49,6 @@ function responseProblem(status: number): string {
   switch (status) {
     case 400:
       return "The server rejected the request.";
-    case 401:
-      return "Authentication failed.";
     case 404:
       return "The session no longer exists.";
     case 409:

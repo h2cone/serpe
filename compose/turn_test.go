@@ -309,6 +309,63 @@ func mustTools(t *testing.T, ts ...tools.Tool) *tools.Executor {
 	return e
 }
 
+func TestSendAttachesSessionWorkingDir(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	tool := scopeProbe{}
+	model := &scriptedModel{responses: []*models.Response{
+		{
+			Provider: "script", ID: "r1", Model: "m", Status: models.ResponseStatusCompleted,
+			Candidates: []models.Candidate{{
+				Index: 0,
+				Content: []models.Content{
+					models.ToolCallContent("c1", "probe", json.RawMessage(`{}`)),
+				},
+				FinishReason: models.FinishToolCall,
+			}},
+		},
+		textResponse("done"),
+	}}
+	store := sessions.NewMemoryStore()
+	mgr, err := sessions.NewManager(store, sessions.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, sessions.New("s1", dir)); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := loops.New(loops.Config{
+		Model: model,
+		Tools: mustTools(t, &tool),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := compose.New(compose.Config{Runner: runner, Manager: mgr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Send(ctx, "s1", "go"); err != nil {
+		t.Fatal(err)
+	}
+	if tool.cwd != dir {
+		t.Fatalf("scope cwd=%q, want %q", tool.cwd, dir)
+	}
+}
+
+type scopeProbe struct {
+	cwd string
+}
+
+func (scopeProbe) Definition() models.Tool {
+	return models.NewTool("probe", "probe", json.RawMessage(`{"type":"object","properties":{}}`))
+}
+
+func (p *scopeProbe) Execute(_ context.Context, in tools.Invocation) (tools.Output, error) {
+	p.cwd = in.Scope.WorkingDir
+	return tools.Text("ok"), nil
+}
+
 func TestSendFatalDoesNotCommit(t *testing.T) {
 	ctx := context.Background()
 	model := &scriptedModel{errs: []error{

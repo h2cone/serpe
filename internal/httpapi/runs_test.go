@@ -184,7 +184,6 @@ func TestRunWithTool(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"s1","prompt":"what time?"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testBearerToken)
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
@@ -328,7 +327,6 @@ func TestRunWithTwoToolsAssertsIndex(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/runs",
 		bytes.NewBufferString(`{"session_id":"s1","prompt":"go"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testBearerToken)
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())

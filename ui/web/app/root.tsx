@@ -36,8 +36,8 @@ export default function App() {
 
 export function HydrateFallback() {
   return (
-    <main className="token-gate">
-      <section className="token-panel" aria-labelledby="loading-heading">
+    <main className="loading-gate">
+      <section className="loading-panel" aria-labelledby="loading-heading">
         <div className="empty-mark" aria-hidden="true" />
         <h1 id="loading-heading">Opening Serpe</h1>
         <p>Loading the local interface…</p>

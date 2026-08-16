@@ -13,13 +13,14 @@ import (
 )
 
 // RunnerConfig contains the provider settings shared by command entrypoints.
+// Tools are already constructed by the composition root; an empty list
+// registers no local tools.
 type RunnerConfig struct {
-	APIKey           string
-	BaseURL          string
-	Model            string
-	ToolProfile      *ToolProfile
-	ContributedTools []tools.Tool
-	ToolExecutor     tools.Config
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Tools        []tools.Tool
+	ToolExecutor tools.Config
 }
 
 // RunnerConfigFromEnv reads the Serpe OpenAI environment contract.
@@ -31,30 +32,33 @@ func RunnerConfigFromEnv() RunnerConfig {
 	}
 }
 
-// NewRunner constructs the provider model and shared application tools.
-func NewRunner(cfg RunnerConfig) (*loops.Runner, WorkingDirAccess, error) {
+// NewRunner constructs the provider model and optional tool executor.
+func NewRunner(cfg RunnerConfig) (*loops.Runner, error) {
 	provider, err := providers.New(providers.Config{
 		Protocol: providers.OpenAIResponses,
 		APIKey:   cfg.APIKey,
 		BaseURL:  cfg.BaseURL,
 	})
 	if err != nil {
-		return nil, WorkingDirAccess{}, fmt.Errorf("bootstrap provider: %w", err)
+		return nil, fmt.Errorf("bootstrap provider: %w", err)
 	}
 	model, err := provider.ResolveModel(cfg.Model)
 	if err != nil {
-		return nil, WorkingDirAccess{}, fmt.Errorf("bootstrap model %q: %w", cfg.Model, err)
+		return nil, fmt.Errorf("bootstrap model %q: %w", cfg.Model, err)
 	}
-	exec, access, err := buildTools(cfg.ToolProfile, cfg.ContributedTools, cfg.ToolExecutor)
-	if err != nil {
-		return nil, WorkingDirAccess{}, err
+	var exec *tools.Executor
+	if len(cfg.Tools) > 0 {
+		exec, err = tools.New(cfg.ToolExecutor, cfg.Tools...)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap tools: %w", err)
+		}
 	}
 	runner, err := loops.New(loops.Config{
 		Model: model,
 		Tools: exec,
 	})
 	if err != nil {
-		return nil, WorkingDirAccess{}, fmt.Errorf("bootstrap runner: %w", err)
+		return nil, fmt.Errorf("bootstrap runner: %w", err)
 	}
-	return runner, access, nil
+	return runner, nil
 }

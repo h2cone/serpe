@@ -1,7 +1,7 @@
 //go:build windows
 
 // Package securefs centralizes private-file ownership and access checks used
-// by persistent stores and server secrets.
+// by FileStore.
 package securefs
 
 import (

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/tools"
+	"github.com/h2cone/serpe/core/tools/builtin"
 	"github.com/h2cone/serpe/internal/bootstrap"
 	"github.com/h2cone/serpe/runtime/loops"
 )
@@ -24,9 +26,9 @@ func main() {
 
 	cwd := must(filepath.Abs(must(os.Getwd())))
 	cfg := bootstrap.RunnerConfigFromEnv()
-	cfg.ToolProfile = bootstrap.LocalCLIProfile(cwd)
-	runner, access := must2(bootstrap.NewRunner(cfg))
-	ctx = must(access.Bind(ctx, cwd))
+	cfg.Tools = must(builtin.NewDefault()).Tools()
+	runner := must(bootstrap.NewRunner(cfg))
+	ctx = tools.WithScope(ctx, tools.Scope{WorkingDir: cwd})
 
 	prompt := "Read README.md and summarize this repository in three bullets."
 	if len(os.Args) > 1 {
@@ -86,11 +88,4 @@ func must[T any](v T, err error) T {
 		log.Fatal(err)
 	}
 	return v
-}
-
-func must2[A, B any](a A, b B, err error) (A, B) {
-	if err != nil {
-		log.Fatal(err)
-	}
-	return a, b
 }

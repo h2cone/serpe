@@ -225,14 +225,10 @@ func newTestServerWithStore(t *testing.T, model models.Model, exec *tools.Execut
 	}
 	t.Cleanup(func() { _ = mgr.Close() })
 	serverConfig := httpapi.Config{
-		Runner:              runner,
-		Manager:             mgr,
-		CWD:                 t.TempDir(),
-		NewID:               newID,
-		AllowInsecureNoAuth: exec == nil,
-	}
-	if exec != nil {
-		serverConfig.BearerToken = testBearerToken
+		Runner:  runner,
+		Manager: mgr,
+		CWD:     t.TempDir(),
+		NewID:   newID,
 	}
 	srv, err := httpapi.New(serverConfig)
 	if err != nil {
@@ -240,8 +236,6 @@ func newTestServerWithStore(t *testing.T, model models.Model, exec *tools.Execut
 	}
 	return srv, mgr
 }
-
-const testBearerToken = "0123456789abcdef0123456789abcdef"
 
 type deadlineRecorder struct{ *httptest.ResponseRecorder }
 

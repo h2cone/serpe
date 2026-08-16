@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearAPIToken, setAPIToken } from "./auth";
 import { parseSSE, SSEDisconnectError, streamRun } from "./sse";
 import { WireProtocolError } from "./wire";
 
@@ -19,7 +18,6 @@ function readerFrom(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
 }
 
 afterEach(() => {
-  clearAPIToken();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -122,10 +120,8 @@ describe("parseSSE", () => {
     expect(releaseLock).toHaveBeenCalledOnce();
   });
 
-  it("requires a terminal event and authenticates the fetch", async () => {
+  it("requires a terminal event and uses a bare fetch", async () => {
     vi.stubGlobal("window", {});
-    const token = "B".repeat(32);
-    setAPIToken(token);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode('data: {"t":"run_start"}\n\n'));
@@ -145,9 +141,6 @@ describe("parseSSE", () => {
     await expect(consume()).rejects.toBeInstanceOf(SSEDisconnectError);
     const init = fetchMock.mock.calls[0][1];
     expect(init).toBeDefined();
-    expect(new Headers(init?.headers).get("Authorization")).toBe(
-      `Bearer ${token}`,
-    );
     expect(init?.credentials).toBe("omit");
   });
 });

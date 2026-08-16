@@ -22,7 +22,6 @@ var (
 )
 
 type readCursorPayload struct {
-	root     [32]byte
 	path     [32]byte
 	identity [32]byte
 	content  [32]byte
@@ -106,8 +105,7 @@ func cursorAAD(keyID [16]byte) []byte {
 }
 
 func marshalCursorPayload(payload readCursorPayload) []byte {
-	wire := make([]byte, 0, 4*32+8+4+4)
-	wire = append(wire, payload.root[:]...)
+	wire := make([]byte, 0, 3*32+8+4+4)
 	wire = append(wire, payload.path[:]...)
 	wire = append(wire, payload.identity[:]...)
 	wire = append(wire, payload.content[:]...)
@@ -119,17 +117,16 @@ func marshalCursorPayload(payload readCursorPayload) []byte {
 }
 
 func unmarshalCursorPayload(wire []byte) (readCursorPayload, bool) {
-	if len(wire) != 4*32+8+4+4 {
+	if len(wire) != 3*32+8+4+4 {
 		return readCursorPayload{}, false
 	}
 	var payload readCursorPayload
-	copy(payload.root[:], wire[:32])
-	copy(payload.path[:], wire[32:64])
-	copy(payload.identity[:], wire[64:96])
-	copy(payload.content[:], wire[96:128])
-	payload.offset = binary.BigEndian.Uint64(wire[128:136])
-	payload.line = binary.BigEndian.Uint32(wire[136:140])
-	payload.lines = binary.BigEndian.Uint32(wire[140:144])
+	copy(payload.path[:], wire[:32])
+	copy(payload.identity[:], wire[32:64])
+	copy(payload.content[:], wire[64:96])
+	payload.offset = binary.BigEndian.Uint64(wire[96:104])
+	payload.line = binary.BigEndian.Uint32(wire[104:108])
+	payload.lines = binary.BigEndian.Uint32(wire[108:112])
 	if payload.offset > math.MaxInt64 || payload.line == 0 || payload.lines == 0 || payload.lines > 10_000 {
 		return readCursorPayload{}, false
 	}

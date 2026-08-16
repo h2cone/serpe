@@ -9,8 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -31,7 +29,7 @@ var bashSchema = json.RawMessage(`{
 type bashTool struct{ set *Set }
 
 func (bashTool) Definition() models.Tool {
-	return models.NewTool("bash", "Run a command with a startup-pinned Bash image and an explicit minimal environment. Bash has the full Serpe process identity, can access paths outside workspace roots, and is not a sandbox.", bashSchema)
+	return models.NewTool("bash", "Run a command with a startup-pinned Bash image. Bash has the full Serpe process identity and is not a sandbox.", bashSchema)
 }
 
 func (t bashTool) Execute(ctx context.Context, in tools.Invocation) (tools.Output, error) {
@@ -63,11 +61,10 @@ func (t bashTool) Execute(ctx context.Context, in tools.Invocation) (tools.Outpu
 		}
 	}()
 
-	runCtx, cancel := context.WithTimeout(ctx, t.set.cfg.BashTimeout)
+	runCtx, cancel := context.WithTimeout(ctx, defaultBashTimeout)
 	defer cancel()
 	command := exec.Command(t.set.bash.path, "--noprofile", "--norc", "-c", commandText)
 	command.Dir = workingDirectory
-	command.Env = flattenEnv(t.set.cfg.BashEnvironment)
 	command.Stdin = nil
 	if err := bindPinnedBashImage(command, bashFile); err != nil {
 		return tools.Output{}, err
@@ -199,8 +196,9 @@ func drainBashPipes(stdout, stderr *os.File, done <-chan bashPipeResult) (bashPi
 }
 
 func (t bashTool) openPinnedBash() (*os.File, error) {
+	t.set.ensureBash()
 	if t.set.bash.unavailable || t.set.bash.path == "" {
-		return nil, errors.New("bash was unavailable at startup; restart after configuring BashPath or PATH")
+		return nil, errors.New("bash was unavailable at startup; restart after adding bash to PATH")
 	}
 	file, err := openPinnedBashFile(t.set.bash.path)
 	if err != nil {
@@ -213,27 +211,6 @@ func (t bashTool) openPinnedBash() (*os.File, error) {
 		return nil, errors.New("the pinned Bash image identity changed; inspect configuration and restart")
 	}
 	return file, nil
-}
-
-func flattenEnv(environment map[string]string) []string {
-	keys := make([]string, 0, len(environment))
-	for key := range environment {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool { return stringsLessFold(keys[i], keys[j]) })
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, key+"="+environment[key])
-	}
-	return out
-}
-
-func stringsLessFold(left, right string) bool {
-	upperLeft, upperRight := strings.ToUpper(left), strings.ToUpper(right)
-	if upperLeft == upperRight {
-		return left < right
-	}
-	return upperLeft < upperRight
 }
 
 var errBashOutputLimit = errors.New("bash output scan limit exceeded")

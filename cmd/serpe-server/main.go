@@ -2,9 +2,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,30 +14,22 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/h2cone/serpe/core/tools"
+	"github.com/h2cone/serpe/core/tools/builtin"
 	"github.com/h2cone/serpe/internal/bootstrap"
 	"github.com/h2cone/serpe/internal/httpapi"
-	"github.com/h2cone/serpe/internal/securefs"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 type options struct {
-	listen         string
-	cwd            string
-	storeRoot      string
-	tokenFile      string
-	insecureNoAuth bool
-	tlsCert        string
-	tlsKey         string
-	origins        string
-	tools          string
-	workspaceRoots string
-	enableBash     bool
-	bashPath       string
+	listen    string
+	cwd       string
+	storeRoot string
+	tools     string
 }
 
 func main() {
@@ -75,39 +65,23 @@ func run() (returnErr error) {
 	}
 	defer func() { returnErr = errors.Join(returnErr, manager.Close()) }()
 
+	localTools, err := resolveLocalTools(opts.tools)
+	if err != nil {
+		return err
+	}
 	runnerConfig := bootstrap.RunnerConfigFromEnv()
-	runnerConfig.ToolProfile, err = serverToolProfile(opts)
+	runnerConfig.Tools = localTools
+	runner, err := bootstrap.NewRunner(runnerConfig)
 	if err != nil {
 		return err
-	}
-	runner, access, err := bootstrap.NewRunner(runnerConfig)
-	if err != nil {
-		return err
-	}
-	if err := access.Validate(context.Background(), cwd); err != nil {
-		return fmt.Errorf("validate startup CWD: %w", err)
 	}
 
-	token, err := readTokenFile(opts.tokenFile)
-	if err != nil {
-		return err
-	}
-	tlsConfig, err := loadTLSConfig(opts.tlsCert, opts.tlsKey)
-	if err != nil {
-		return err
-	}
 	api, err := httpapi.New(httpapi.Config{
 		Runner: runner, Manager: manager, CWD: cwd,
-		BindWorkingDir: access.Bind, ValidateWorkingDir: access.Validate,
-		ListenAddress: opts.listen, TLSConfigured: tlsConfig != nil,
-		BearerToken: token, AllowInsecureNoAuth: opts.insecureNoAuth,
-		AllowedOrigins: splitCommaList(opts.origins),
+		ListenAddress: opts.listen,
 	})
 	if err != nil {
 		return err
-	}
-	if opts.insecureNoAuth {
-		log.Print("WARNING: insecure no-auth development mode exposes transcripts and provider quota to every local process")
 	}
 
 	listener, err := net.Listen("tcp", opts.listen)
@@ -118,9 +92,6 @@ func run() (returnErr error) {
 	if err != nil {
 		_ = listener.Close()
 		return err
-	}
-	if tlsConfig != nil {
-		gated = tls.NewListener(gated, tlsConfig)
 	}
 
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -142,7 +113,7 @@ func run() (returnErr error) {
 		shutdownDone <- httpServer.Shutdown(shutdownContext)
 	}()
 
-	log.Printf("listening on %s (cwd=%s tls=%t tools=%d)", gated.Addr(), filepath.Clean(cwd), tlsConfig != nil, len(runner.ToolDefinitions()))
+	log.Printf("listening on %s (cwd=%s tools=%d)", gated.Addr(), filepath.Clean(cwd), len(runner.ToolDefinitions()))
 	serveErr := httpServer.Serve(gated)
 	stop()
 	shutdownErr := <-shutdownDone
@@ -188,15 +159,7 @@ func parseOptions() (options, error) {
 	flag.StringVar(&opts.listen, "listen", envOr("SERPE_ADDR", "127.0.0.1:8080"), "IP-literal listen address and port")
 	flag.StringVar(&opts.cwd, "cwd", envOr("SERPE_CWD", defaultCWD), "default session working directory")
 	flag.StringVar(&opts.storeRoot, "sessions-dir", os.Getenv("SERPE_SESSIONS_DIR"), "private session store directory")
-	flag.StringVar(&opts.tokenFile, "api-token-file", os.Getenv("SERPE_API_TOKEN_FILE"), "absolute file containing the bearer token")
-	flag.BoolVar(&opts.insecureNoAuth, "insecure-no-auth", envBool("SERPE_INSECURE_NO_AUTH"), "allow unauthenticated loopback development with zero tools")
-	flag.StringVar(&opts.tlsCert, "tls-cert", os.Getenv("SERPE_TLS_CERT"), "absolute TLS certificate path")
-	flag.StringVar(&opts.tlsKey, "tls-key", os.Getenv("SERPE_TLS_KEY"), "absolute TLS private-key path")
-	flag.StringVar(&opts.origins, "allowed-origins", os.Getenv("SERPE_ALLOWED_ORIGINS"), "comma-separated canonical browser origins")
-	flag.StringVar(&opts.tools, "tools", os.Getenv("SERPE_TOOLS"), "comma-separated local tools: read,write,edit,bash")
-	flag.StringVar(&opts.workspaceRoots, "workspace-roots", os.Getenv("SERPE_WORKSPACE_ROOTS"), "OS path-list of authorized workspace roots")
-	flag.BoolVar(&opts.enableBash, "enable-bash", envBool("SERPE_ENABLE_BASH"), "independent high-risk opt-in for bash")
-	flag.StringVar(&opts.bashPath, "bash-path", os.Getenv("SERPE_BASH_PATH"), "absolute trusted Bash executable")
+	flag.StringVar(&opts.tools, "tools", os.Getenv("SERPE_TOOLS"), "comma-separated subset of read,write,edit,bash; empty enables all four; none disables local tools")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return options{}, fmt.Errorf("unexpected positional arguments")
@@ -221,135 +184,39 @@ func openSessionStore(root string) (sessions.Store, error) {
 	return store, nil
 }
 
-func serverToolProfile(opts options) (*bootstrap.ToolProfile, error) {
-	enabled := splitCommaList(opts.tools)
-	if len(enabled) == 0 {
-		if opts.enableBash || opts.bashPath != "" || opts.workspaceRoots != "" {
-			return nil, fmt.Errorf("tool-specific options require --tools")
-		}
+func resolveLocalTools(spec string) ([]tools.Tool, error) {
+	if spec == "none" {
 		return nil, nil
 	}
-	hasBash := false
-	for _, name := range enabled {
-		if name == "bash" {
-			hasBash = true
+	var names []string
+	if spec != "" {
+		var err error
+		names, err = parseToolNames(spec)
+		if err != nil {
+			return nil, err
 		}
 	}
-	if hasBash != opts.enableBash {
-		return nil, fmt.Errorf("bash requires both --tools=bash and --enable-bash")
-	}
-	if hasBash && opts.bashPath == "" {
-		return nil, fmt.Errorf("enabled bash requires --bash-path")
-	}
-	var roots []string
-	if opts.workspaceRoots != "" {
-		for _, root := range filepath.SplitList(opts.workspaceRoots) {
-			absolute, err := filepath.Abs(root)
-			if err != nil {
-				return nil, err
-			}
-			roots = append(roots, absolute)
-		}
-	}
-	return &bootstrap.ToolProfile{
-		Enabled: enabled, WorkspaceRoots: roots, BashPath: opts.bashPath,
-	}, nil
-}
-
-func readTokenFile(path string) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("api token file: path must be absolute")
-	}
-	file, err := securefs.OpenRegular(filepath.Clean(path), true)
+	set, err := builtin.NewDefault()
 	if err != nil {
-		return "", fmt.Errorf("api token file: %w", err)
-	}
-	raw, readErr := io.ReadAll(io.LimitReader(file, 4099))
-	closeErr := file.Close()
-	if readErr != nil || closeErr != nil {
-		clear(raw)
-		return "", errors.Join(readErr, closeErr)
-	}
-	defer clear(raw)
-	if len(raw) > 4098 || bytes.HasPrefix(raw, []byte{0xef, 0xbb, 0xbf}) {
-		return "", fmt.Errorf("api token file is invalid")
-	}
-	if bytes.HasSuffix(raw, []byte("\r\n")) {
-		raw = raw[:len(raw)-2]
-	} else if bytes.HasSuffix(raw, []byte("\n")) {
-		raw = raw[:len(raw)-1]
-	}
-	if bytes.ContainsAny(raw, "\r\n") {
-		return "", fmt.Errorf("api token file must contain exactly one line")
-	}
-	return string(raw), nil
-}
-
-func loadTLSConfig(certificatePath, keyPath string) (*tls.Config, error) {
-	if certificatePath == "" && keyPath == "" {
-		return nil, nil
-	}
-	if certificatePath == "" || keyPath == "" {
-		return nil, fmt.Errorf("both --tls-cert and --tls-key are required")
-	}
-	if !filepath.IsAbs(certificatePath) || !filepath.IsAbs(keyPath) {
-		return nil, fmt.Errorf("TLS certificate and private-key paths must be absolute")
-	}
-	certificate, err := securefs.OpenRegular(filepath.Clean(certificatePath), false)
-	if err != nil {
-		return nil, fmt.Errorf("TLS certificate: %w", err)
-	}
-	defer certificate.Close()
-	key, err := securefs.OpenRegular(filepath.Clean(keyPath), true)
-	if err != nil {
-		return nil, fmt.Errorf("TLS private key: %w", err)
-	}
-	defer key.Close()
-	const maxTLSPEMBytes = 16 << 20
-	certificatePEM, err := readBounded(certificate, maxTLSPEMBytes)
-	if err != nil {
-		return nil, fmt.Errorf("read TLS certificate: %w", err)
-	}
-	defer clear(certificatePEM)
-	keyPEM, err := readBounded(key, maxTLSPEMBytes)
-	if err != nil {
-		return nil, fmt.Errorf("read TLS private key: %w", err)
-	}
-	defer clear(keyPEM)
-	pair, err := tls.X509KeyPair(certificatePEM, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("load TLS key pair: %w", err)
-	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}, nil
-}
-
-func readBounded(reader io.Reader, limit int64) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
-	if err != nil {
-		clear(data)
 		return nil, err
 	}
-	if int64(len(data)) > limit {
-		clear(data)
-		return nil, fmt.Errorf("file exceeds %d bytes", limit)
+	if spec == "" {
+		return set.Tools(), nil
 	}
-	return data, nil
+	return set.Select(names)
 }
 
-func splitCommaList(value string) []string {
-	if value == "" {
-		return nil
-	}
+func parseToolNames(value string) ([]string, error) {
 	parts := strings.Split(value, ",")
-	for i := range parts {
-		if parts[i] == "" || strings.TrimSpace(parts[i]) != parts[i] {
-			return []string{""}
+	for _, part := range parts {
+		if part == "" || strings.TrimSpace(part) != part {
+			return nil, fmt.Errorf("invalid --tools list")
+		}
+		if part == "none" {
+			return nil, fmt.Errorf("--tools=none cannot be combined with other names")
 		}
 	}
-	return parts
+	return parts, nil
 }
 
 func envOr(key, fallback string) string {
@@ -357,16 +224,4 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
-}
-
-func envBool(key string) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return false
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false
-	}
-	return parsed
 }

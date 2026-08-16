@@ -4,7 +4,6 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -16,28 +15,21 @@ import (
 	"time"
 
 	"github.com/h2cone/serpe/compose"
-	"github.com/h2cone/serpe/core/tools"
 	"github.com/h2cone/serpe/runtime/loops"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // Config constructs a Server.
 type Config struct {
-	Runner              *loops.Runner     // required: agent execution
-	Manager             *sessions.Manager // required: sessions and turn persistence
-	CWD                 string            // default cwd for new sessions; required non-empty
-	NewID               func() string
-	BindWorkingDir      func(context.Context, string) (context.Context, error)
-	ValidateWorkingDir  func(context.Context, string) error
-	ListenAddress       string
-	TLSConfigured       bool
-	BearerToken         string
-	AllowInsecureNoAuth bool
-	AllowedOrigins      []string
-	Random              io.Reader
-	Limits              ServerLimits
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
+	Runner        *loops.Runner     // required: agent execution
+	Manager       *sessions.Manager // required: sessions and turn persistence
+	CWD           string            // default cwd for new sessions; required non-empty
+	NewID         func() string
+	ListenAddress string
+	Random        io.Reader
+	Limits        ServerLimits
+	ReadTimeout   time.Duration
+	WriteTimeout  time.Duration
 }
 
 // ServerLimits are process-wide admission ceilings. Zero fields use the
@@ -55,12 +47,8 @@ type Server struct {
 	mgr            *sessions.Manager
 	cwd            string
 	newID          func() string
-	validateCWD    func(context.Context, string) error
 	random         io.Reader
 	cursors        *cursorCodec
-	authHash       [sha256.Size]byte
-	authenticated  bool
-	origins        map[string]struct{}
 	limits         ServerLimits
 	requestPermits chan struct{}
 	runPermits     chan struct{}
@@ -90,22 +78,6 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !loopback && !cfg.TLSConfigured {
-		return nil, fmt.Errorf("httpapi: non-loopback listener requires server-side TLS")
-	}
-	if cfg.BearerToken == "" {
-		if !cfg.AllowInsecureNoAuth {
-			return nil, fmt.Errorf("httpapi: BearerToken is required unless insecure no-auth mode is explicitly enabled")
-		}
-		if !loopback {
-			return nil, fmt.Errorf("httpapi: insecure no-auth mode requires a literal loopback listener")
-		}
-		if len(cfg.Runner.ToolDefinitions()) != 0 {
-			return nil, fmt.Errorf("httpapi: insecure no-auth mode requires zero tool definitions")
-		}
-	} else if err := validateBearerToken(cfg.BearerToken); err != nil {
-		return nil, err
-	}
 	limits, err := normalizeServerLimits(cfg.Limits)
 	if err != nil {
 		return nil, err
@@ -126,42 +98,21 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: cursor entropy: %w", err)
 	}
-	origins, err := normalizeOrigins(cfg.AllowedOrigins)
-	if err != nil {
-		return nil, err
-	}
-	validateCWD := cfg.ValidateWorkingDir
-	if validateCWD == nil {
-		validateCWD = validateDirectory
-	}
-	if err := validateCWD(context.Background(), cfg.CWD); err != nil {
+	if err := validateDirectory(context.Background(), cfg.CWD); err != nil {
 		return nil, fmt.Errorf("httpapi: invalid startup CWD: %w", err)
 	}
-	bind := cfg.BindWorkingDir
-	if bind == nil {
-		bind = func(ctx context.Context, cwd string) (context.Context, error) {
-			if err := validateCWD(ctx, cwd); err != nil {
-				return nil, err
-			}
-			return tools.WithScope(ctx, tools.Scope{WorkingDir: cwd}), nil
-		}
-	}
-	turns, err := compose.New(compose.Config{Runner: cfg.Runner, Manager: cfg.Manager, BindWorkingDir: bind})
+	turns, err := compose.New(compose.Config{Runner: cfg.Runner, Manager: cfg.Manager})
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: compose turns: %w", err)
 	}
 	server := &Server{
 		turns: turns, mgr: cfg.Manager, cwd: filepath.Clean(cfg.CWD), newID: cfg.NewID,
-		validateCWD: validateCWD, random: random, cursors: cursors, origins: origins,
+		random: random, cursors: cursors,
 		limits: limits, requestPermits: make(chan struct{}, limits.MaxRequests),
 		runPermits:    make(chan struct{}, limits.MaxRuns),
 		encodePermits: make(chan struct{}, limits.MaxSessionEncodes),
 		readTimeout:   readTimeout, writeTimeout: writeTimeout,
 		listenAddress: listenAddress, listenLoopback: loopback,
-	}
-	if cfg.BearerToken != "" {
-		server.authHash = sha256.Sum256([]byte(cfg.BearerToken))
-		server.authenticated = true
 	}
 	return server, nil
 }
@@ -244,7 +195,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/runs", s.handleRun)
 	// Content-Type is set explicitly by writeJSON / SSE handlers; no jsonMW interceptor.
-	return chain(mux, recoverMW, s.requestIDMW, s.deadlineSupportMW, loggingMW, s.securityMW, s.corsMW, s.authMW, s.requestAdmissionMW)
+	return chain(mux, recoverMW, s.requestIDMW, s.deadlineSupportMW, loggingMW, s.securityMW, s.requestAdmissionMW)
 }
 
 // ListenAndServe listens on addr with the wired handler.
@@ -277,24 +228,6 @@ func classifyListenAddress(address string) (bool, error) {
 		return false, fmt.Errorf("httpapi: ListenAddress host must be an IP literal")
 	}
 	return ip.IsLoopback(), nil
-}
-
-func validateBearerToken(token string) error {
-	if len(token) < 32 || len(token) > 4096 {
-		return fmt.Errorf("httpapi: BearerToken must be 32 to 4096 bytes")
-	}
-	padding := false
-	for i := 0; i < len(token); i++ {
-		c := token[i]
-		if c == '=' {
-			padding = true
-			continue
-		}
-		if padding || !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._~+/", rune(c))) {
-			return fmt.Errorf("httpapi: BearerToken has invalid RFC 6750 b64token syntax")
-		}
-	}
-	return nil
 }
 
 func normalizeServerLimits(limits ServerLimits) (ServerLimits, error) {

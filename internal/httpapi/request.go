@@ -222,7 +222,7 @@ func (s *Server) normalizeWorkingDir(ctx context.Context, value string, present 
 		value = filepath.Join(s.cwd, value)
 	}
 	value = filepath.Clean(value)
-	if err := s.validateCWD(ctx, value); err != nil {
+	if err := validateDirectory(ctx, value); err != nil {
 		return "", err
 	}
 	return value, nil

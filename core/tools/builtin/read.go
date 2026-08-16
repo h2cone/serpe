@@ -182,7 +182,7 @@ func (t readTool) readText(ctx context.Context, in tools.Invocation, target *res
 			}
 			return tools.Error("read cursor is invalid"), nil
 		}
-		if decoded.root != cursorDigest(target.rootIdentity) || decoded.path != cursorDigest(target.path) ||
+		if decoded.path != cursorDigest(target.path) ||
 			decoded.identity != cursorDigest(target.identity) {
 			return tools.Error("read cursor is stale because the path identity changed"), nil
 		}
@@ -301,7 +301,6 @@ func (t readTool) readText(ctx context.Context, in tools.Invocation, target *res
 		var contentDigest [32]byte
 		copy(contentDigest[:], digest)
 		token, err := t.set.cursor.seal(readCursorPayload{
-			root:     cursorDigest(target.rootIdentity),
 			path:     cursorDigest(target.path),
 			identity: cursorDigest(target.identity),
 			content:  contentDigest,

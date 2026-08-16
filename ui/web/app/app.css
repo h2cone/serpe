@@ -195,22 +195,6 @@ summary:focus-visible {
   line-height: 1.45;
 }
 
-.lock-button {
-  margin-top: 0.8rem;
-  border: 0;
-  background: transparent;
-  padding: 0.3rem 0.25rem;
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 640;
-  text-decoration: underline;
-  text-underline-offset: 0.18rem;
-}
-
-.lock-button:hover {
-  color: var(--accent-ink);
-}
-
 .session-nav {
   margin-top: 1.55rem;
 }
@@ -1046,7 +1030,7 @@ summary:focus-visible {
   text-align: center;
 }
 
-.token-gate {
+.loading-gate {
   display: flex;
   min-height: 100vh;
   min-height: 100dvh;
@@ -1057,7 +1041,7 @@ summary:focus-visible {
   padding: 2rem 1rem;
 }
 
-.token-panel {
+.loading-panel {
   width: min(100%, 28rem);
   border-radius: 1rem;
   background: var(--surface);
@@ -1065,12 +1049,7 @@ summary:focus-visible {
   box-shadow: var(--shadow-float);
 }
 
-.token-mark {
-  width: 2.6rem;
-  height: 2.6rem;
-}
-
-.token-panel h1 {
+.loading-panel h1 {
   margin: 1.15rem 0 0;
   color: var(--ink-strong);
   font-size: clamp(1.45rem, 5vw, 2rem);
@@ -1079,74 +1058,11 @@ summary:focus-visible {
   line-height: 1.2;
 }
 
-.token-panel > p {
+.loading-panel > p {
   margin: 0.7rem 0 0;
   color: var(--ink-soft);
   font-size: 0.9rem;
   line-height: 1.65;
-}
-
-.token-panel form {
-  margin-top: 1.5rem;
-}
-
-.token-panel label {
-  display: block;
-  margin-bottom: 0.45rem;
-  color: var(--ink-strong);
-  font-size: 0.78rem;
-  font-weight: 680;
-}
-
-.token-panel input {
-  width: 100%;
-  min-height: 2.9rem;
-  border: 1px solid var(--line-strong);
-  border-radius: 0.75rem;
-  background: var(--surface-subtle);
-  padding: 0.62rem 0.72rem;
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 1rem;
-  line-height: 1.4;
-}
-
-.token-panel input:focus {
-  border-color: #70a79f;
-  outline: 0;
-  box-shadow: var(--focus);
-}
-
-.token-memory,
-.token-problem {
-  margin: 0.55rem 0 0;
-  font-size: 0.72rem;
-  line-height: 1.5;
-}
-
-.token-memory {
-  color: var(--muted);
-}
-
-.token-problem {
-  color: var(--danger);
-}
-
-.token-submit {
-  width: 100%;
-  min-height: 2.85rem;
-  margin-top: 1.15rem;
-  border: 0;
-  border-radius: 0.75rem;
-  background: var(--accent);
-  color: #f8fffd;
-  font-size: 0.84rem;
-  font-weight: 700;
-  box-shadow: 0 4px 12px rgb(7 85 78 / 16%);
-}
-
-.token-submit:hover {
-  background: var(--accent-strong);
 }
 
 .empty-state-inner,

@@ -1,4 +1,3 @@
-import { authorizationHeader, rejectAPIToken } from "./auth";
 import { APIError } from "./api";
 import {
   decodeSSEFrame,
@@ -142,7 +141,6 @@ export async function* streamRun(
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      Authorization: authorizationHeader(),
     },
     body: JSON.stringify(body),
     signal,
@@ -151,12 +149,9 @@ export async function* streamRun(
     redirect: "error",
   });
   if (!res.ok || !res.body) {
-    if (res.status === 401) rejectAPIToken();
     throw new APIError(
       res.status,
-      res.status === 401
-        ? "Authentication failed."
-        : `The run request failed with HTTP ${res.status}.`,
+      `The run request failed with HTTP ${res.status}.`,
     );
   }
   let terminal = false;

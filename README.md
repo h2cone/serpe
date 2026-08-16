@@ -92,14 +92,14 @@ omitted).
 | Seam | Rule |
 |---|---|
 | `runtime/sessions` | imports neither `runtime/loops` nor `core/providers` — the loop is store- and provider-agnostic |
-| `compose` | the application seam: joins `loops.Runner` with `sessions.Manager` into one turn boundary; `BindWorkingDir` attaches `Session.CWD` before the run |
+| `compose` | the application seam: joins `loops.Runner` with `sessions.Manager` into one turn boundary; each turn attaches `tools.Scope` from `Session.CWD` |
 | `internal/httpapi` | takes one `Runner`/`Manager` pair and builds its own `TurnService` — CRUD and runs always share one store |
-| `internal/bootstrap` | owns provider/model/tool construction and the entry `ToolProfile` |
+| `internal/bootstrap` | owns provider/model construction; composition roots pass already-selected tools |
 | `core/tools` | immutable Executor: registry, schema, batch scheduling, output limits |
-| `core/tools/builtin` | local `read`/`write`/`edit`/`bash`; composition roots decide who may use them |
+| `core/tools/builtin` | local `read`/`write`/`edit`/`bash`, default-enabled, confined to the working directory |
 | `internal/jsonvalue` | leaf used by `core/models`, `core/tools`, `runtime/loops`, `internal/httpapi`, and provider internals |
 | `internal/imagecheck` | bounded, structural validation shared by tool output and model-result projection |
-| `internal/securefs` | no-follow opens and private owner/permission checks for server secrets and FileStore |
+| `internal/securefs` | no-follow opens and private owner/permission checks for FileStore |
 | `internal/sessionwire` | one exact JSON-size authority shared by sessions, runtime, and HTTP detail pages |
 
 ## Modules
@@ -147,22 +147,19 @@ own CPU, I/O, and allocations before it returns.
 
 ### `core/tools/builtin`
 
-`read`, `write`, `edit`, and `bash` against authorized workspace roots.
-`builtin.NewDefault` builds the four; `Set.Select` filters by name.
-Composition roots decide who may use them:
-
-- `cmd/serpe` enables all four against the process working directory.
-- `cmd/serpe-server` defaults to zero local tools. Enabling file tools
-  requires workspace roots.
+`read`, `write`, `edit`, and `bash`, enabled by default and confined to the
+bound working directory. `builtin.NewDefault` builds the four; `Set.Select`
+filters by name. Both `cmd/serpe` and `cmd/serpe-server` enable all four by
+default; the server's `--tools` flag can restrict the set or disable it
+with `none`.
 
 `bash` is not a sandbox. It runs `bash --noprofile --norc -c` as the
-Serpe user with a minimal environment and can reach anything that OS identity
-can. Cancellation contains the process group on Unix and a Job Object on
-Windows, but hostile code still requires a container or another real isolation
-boundary. File tools confine paths to pinned workspace roots; that policy does
-not apply to `bash` or arbitrary contributed Tools.
-
-Invariants and the authorization model are in `docs/tools.md`.
+Serpe user with the process environment and can reach anything that OS
+identity can. Cancellation contains the process group on Unix and a Job
+Object on Windows, but hostile code still requires a container or another
+real isolation boundary. File tools confine resolved paths to the working
+directory; that policy does not apply to `bash` or arbitrary contributed
+Tools.
 
 ### `core/providers`
 
@@ -293,7 +290,7 @@ sequenceDiagram
 
     C->>S: Get(id)
     S-->>C: Session (transcript + CWD)
-    C->>C: BindWorkingDir(cwd)
+    C->>C: Attach tools.Scope from Session.CWD
     C->>R: Run / Stream(request)
     R-->>C: result
 
@@ -307,7 +304,7 @@ sequenceDiagram
 
 ```go
 svc, _ := compose.New(compose.Config{
-    Runner: runner, Manager: manager, BindWorkingDir: access.Bind,
+    Runner: runner, Manager: manager,
 })
 result, session, err := svc.Send(ctx, "sess-1", "What is in this repo?")
 // or streaming:
@@ -315,10 +312,8 @@ turn, _ := svc.Stream(ctx, "sess-1", prompt)
 for turn.Next() { /* events */ }
 ```
 
-`BindWorkingDir` is optional; a nil binder is a no-op. CLI and the server
-pass bootstrap's `WorkingDirAccess.Bind`, which attaches a `tools.Scope`
-from the session CWD (and, when file tools are enabled, re-checks the
-workspace roots).
+Each turn attaches `tools.Scope{WorkingDir: session.CWD}` before the run.
+File tools confine paths to that working directory.
 
 Streaming: the commit decision happens before `run_end` is published, so no
 extra `Next()` is needed to persist; after `run_end`, check `Turn.Err()` for
@@ -339,57 +334,24 @@ headers, so lookup/validation errors still return as JSON. Browser-side wire
 types live in `ui/web/app/lib/wire.ts`; Go and TypeScript tests share
 `contracts` fixtures.
 
-The server starts with zero local tools. `--tools`/`SERPE_TOOLS` is an
-explicit capability grant; file tools additionally require pinned workspace
-roots, and `bash` requires its own high-risk opt-in. Every enabled file call
-is rebound to `Session.CWD` and checked against those roots.
+The server enables all four local tools by default. `--tools`/`SERPE_TOOLS`
+restricts the set; `none` disables them. Every file call is bound to
+`Session.CWD`, and `bash` runs with the server's process identity.
 
 ```go
 srv, _ := httpapi.New(httpapi.Config{
     Runner: runner, Manager: manager, CWD: "/work",
-    BindWorkingDir: access.Bind,
-    ListenAddress: "127.0.0.1:8080", BearerToken: token,
+    ListenAddress: "127.0.0.1:8080",
 })
 ```
 
-Bearer authentication is required by default even with zero tools. The token
-file must be an absolute, no-follow regular file owned by the server identity
-and inaccessible to untrusted identities. Generate at least 32 random bytes;
-for example, on Unix:
-
 ```bash
-(umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > /absolute/path/serpe-token)
-```
-
-On Windows PowerShell, create a BOM-free file and replace inherited access:
-
-```powershell
-$tokenPath = 'C:\secure\serpe-token'
-$bytes = [byte[]]::new(32)
-[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-$token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-[IO.File]::WriteAllText($tokenPath, $token, [Text.UTF8Encoding]::new($false))
-$owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls $tokenPath /inheritance:r /grant:r "*$($owner):(R)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)"
-```
-
-```bash
-# Authenticated API on 127.0.0.1:8080; MemoryStore unless configured.
-SERPE_API_TOKEN_FILE=/absolute/path/serpe-token go run ./cmd/serpe-server
-
-# Explicit unauthenticated development is limited to literal loopback and
-# zero tool definitions.
-go run ./cmd/serpe-server --insecure-no-auth
+# API on 127.0.0.1:8080; MemoryStore unless configured.
+go run ./cmd/serpe-server
 
 # Web dev server (proxies /api → http://127.0.0.1:8080)
 cd ui/web && pnpm install && pnpm run dev
 ```
-
-The Web UI asks for the bearer token and keeps it only in memory: it is not
-placed in URLs, cookies, browser storage, or SSE query strings. A non-loopback
-listener requires both authentication and server-side TLS. Certificate and key
-paths must be absolute private regular files; configure an explicit origin
-allowlist for browser clients.
 
 | Env var | Used by | Meaning |
 |---|---|---|
@@ -399,14 +361,7 @@ allowlist for browser clients.
 | `SERPE_ADDR` | server | IP-literal listen address (default `127.0.0.1:8080`) |
 | `SERPE_CWD` | server | default session CWD (default: process cwd) |
 | `SERPE_SESSIONS_DIR` | server | existing absolute private FileStore root; unset → MemoryStore |
-| `SERPE_API_TOKEN_FILE` | server | absolute private bearer-token file |
-| `SERPE_INSECURE_NO_AUTH` | server | loopback + zero-tools development escape hatch |
-| `SERPE_TLS_CERT`, `SERPE_TLS_KEY` | server | absolute private TLS PEM files; both required together |
-| `SERPE_ALLOWED_ORIGINS` | server | comma-separated canonical browser origins |
-| `SERPE_TOOLS` | server | comma-separated grant from `read,write,edit,bash` |
-| `SERPE_WORKSPACE_ROOTS` | server | OS path-list of absolute roots for file tools |
-| `SERPE_ENABLE_BASH` | server | independent opt-in required when `bash` is granted |
-| `SERPE_BASH_PATH` | server | optional absolute trusted Bash executable |
+| `SERPE_TOOLS` | server | optional restriction from `read,write,edit,bash`; empty enables all four; `none` disables local tools |
 | `SERPE_API_ORIGIN` | web | backend origin (default `http://127.0.0.1:8080`) |
 
 #### FileStore migration
@@ -445,15 +400,13 @@ unknown files, links, or checksum changes.
   bounded acknowledgment with `messages_omitted` and `detail_url`.
 - Parallel tool events are correlated by call ID/index: starts and ends need
   not be adjacent, ends may be out of order, and skipped calls emit no event.
-- The server now requires bearer authentication by default; non-loopback
-  listeners additionally require TLS.
 
 ### `cmd/serpe`
 
 Thin CLI: arguments and event rendering only — wiring lives in
-`internal/bootstrap`, the model–tool loop in `runtime/loops`. It sets
-`bootstrap.LocalCLIProfile` for the process working directory
-(`read`/`write`/`edit`/`bash`). `bash` runs as the Serpe user.
+`internal/bootstrap`, the model–tool loop in `runtime/loops`. It enables
+the four local tools and attaches the process working directory as
+`tools.Scope`. `bash` runs as the Serpe user.
 
 ```bash
 go run ./cmd/serpe "Summarize this repo"

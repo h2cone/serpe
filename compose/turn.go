@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/h2cone/serpe/core/models"
+	"github.com/h2cone/serpe/core/tools"
 	"github.com/h2cone/serpe/runtime/loops"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
@@ -17,9 +18,8 @@ var ErrConcurrentTurn = sessions.ErrConflict
 
 // Config constructs a TurnService.
 type Config struct {
-	Runner         *loops.Runner
-	Manager        *sessions.Manager
-	BindWorkingDir func(context.Context, string) (context.Context, error)
+	Runner  *loops.Runner
+	Manager *sessions.Manager
 }
 
 // TurnService runs one conversational turn against a session: load history,
@@ -31,7 +31,6 @@ type Config struct {
 type TurnService struct {
 	runner *loops.Runner
 	mgr    *sessions.Manager
-	bind   func(context.Context, string) (context.Context, error)
 }
 
 // New validates config and returns a TurnService.
@@ -46,11 +45,7 @@ func New(cfg Config) (*TurnService, error) {
 		return nil, fmt.Errorf("compose: runner session-message limit %d exceeds manager limit %d",
 			cfg.Runner.Limits().MaxSessionMessageJSONBytes, cfg.Manager.Limits().MaxSessionMessageJSONBytes)
 	}
-	bind := cfg.BindWorkingDir
-	if bind == nil {
-		bind = func(ctx context.Context, _ string) (context.Context, error) { return ctx, nil }
-	}
-	return &TurnService{runner: cfg.Runner, mgr: cfg.Manager, bind: bind}, nil
+	return &TurnService{runner: cfg.Runner, mgr: cfg.Manager}, nil
 }
 
 // Send runs a blocking turn. On success it returns the run result and the
@@ -61,11 +56,7 @@ func (s *TurnService) Send(ctx context.Context, sessionID, prompt string) (*loop
 	if err != nil {
 		return nil, nil, err
 	}
-	runCtx, err := s.bind(ctx, tx.cwd)
-	if err != nil {
-		return nil, nil, err
-	}
-	result, err := s.runner.Run(runCtx, tx.req)
+	result, err := s.runner.Run(withSessionScope(ctx, tx.cwd), tx.req)
 	if err != nil {
 		// Request validation / construction failure: no partial result.
 		// Fatal/cancel after start: partial result, no commit.
@@ -96,11 +87,7 @@ func (s *TurnService) Stream(ctx context.Context, sessionID, prompt string) (*Tu
 	if err != nil {
 		return nil, err
 	}
-	runCtx, err := s.bind(ctx, tx.cwd)
-	if err != nil {
-		return nil, err
-	}
-	inner, err := s.runner.Stream(runCtx, tx.req)
+	inner, err := s.runner.Stream(withSessionScope(ctx, tx.cwd), tx.req)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +107,10 @@ type turnTxn struct {
 	pre int
 	cwd string
 	req *models.Request
+}
+
+func withSessionScope(ctx context.Context, cwd string) context.Context {
+	return tools.WithScope(ctx, tools.Scope{WorkingDir: cwd})
 }
 
 func (s *TurnService) begin(ctx context.Context, sessionID, prompt string) (*turnTxn, error) {

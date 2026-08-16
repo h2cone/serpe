@@ -31,7 +31,7 @@ func TestNewRequiresOneRunnerManagerCompositionRoot(t *testing.T) {
 			t.Fatalf("invalid config %d succeeded", i)
 		}
 	}
-	if _, err := httpapi.New(httpapi.Config{Runner: runner, Manager: manager, CWD: t.TempDir(), AllowInsecureNoAuth: true}); err != nil {
+	if _, err := httpapi.New(httpapi.Config{Runner: runner, Manager: manager, CWD: t.TempDir()}); err != nil {
 		t.Fatalf("valid config failed: %v", err)
 	}
 }

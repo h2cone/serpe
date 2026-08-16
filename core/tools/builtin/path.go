@@ -28,7 +28,6 @@ type resolvedTarget struct {
 	exists         bool
 	identity       string
 	parentIdentity string
-	rootIdentity   string
 	file           *os.File
 	expected       []byte
 	claims         []tools.Claim
@@ -43,109 +42,17 @@ func (r *resolvedTarget) close() error {
 	return err
 }
 
-// ValidateWorkingDir validates and pins an absolute working directory against
-// this Set's authorized root identities.
-func (s *Set) ValidateWorkingDir(ctx context.Context, cwd string) error {
-	_, err := s.snapshotWorkingDir(ctx, cwd)
-	return err
-}
-
-// BindWorkingDir validates cwd, attaches tools.Scope, and records the exact
-// root/CWD identity snapshot that file Activators must re-check this turn.
-func (s *Set) BindWorkingDir(ctx context.Context, cwd string) (context.Context, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	bound, err := s.snapshotWorkingDir(ctx, cwd)
-	if err != nil {
-		return nil, err
-	}
-	ctx = tools.WithScope(ctx, tools.Scope{WorkingDir: filepath.Clean(cwd)})
-	return context.WithValue(ctx, boundWorkingDirKey{}, bound), nil
-}
-
-func (s *Set) snapshotWorkingDir(ctx context.Context, cwd string) (boundWorkingDir, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return boundWorkingDir{}, err
-	}
-	if err := checkPathString(cwd, s.lim.MaxPathBytes); err != nil {
-		return boundWorkingDir{}, fmt.Errorf("working directory: %w", err)
-	}
-	if !filepath.IsAbs(cwd) {
-		return boundWorkingDir{}, fmt.Errorf("working directory must be absolute")
-	}
-	clean := filepath.Clean(cwd)
-	resolved, err := filepath.EvalSymlinks(clean)
-	if err != nil {
-		return boundWorkingDir{}, fmt.Errorf("working directory is not accessible")
-	}
-	file, err := os.Open(resolved)
-	if err != nil {
-		return boundWorkingDir{}, fmt.Errorf("working directory is not accessible")
-	}
-	info, statErr := file.Stat()
-	identity, idErr := platformFileIdentity(file)
-	closeErr := file.Close()
-	if statErr != nil || !info.IsDir() {
-		return boundWorkingDir{}, fmt.Errorf("working directory is not a directory")
-	}
-	if idErr != nil {
-		return boundWorkingDir{}, fmt.Errorf("working directory identity: %w", idErr)
-	}
-	if closeErr != nil {
-		return boundWorkingDir{}, closeErr
-	}
-	root, err := s.selectRoot(ctx, resolved)
-	if err != nil {
-		return boundWorkingDir{}, err
-	}
-	return boundWorkingDir{setID: s.id, cwd: clean, resolved: filepath.Clean(resolved), identity: identity, root: root}, nil
-}
-
-func (s *Set) selectRoot(ctx context.Context, resolvedCWD string) (rootSnapshot, error) {
-	if len(s.roots) == 0 {
-		return rootSnapshot{}, nil
-	}
-	for _, root := range s.roots {
-		if err := ctx.Err(); err != nil {
-			return rootSnapshot{}, err
-		}
-		if !pathWithin(root.path, resolvedCWD) {
-			continue
-		}
-		file, err := os.Open(root.path)
-		if err != nil {
-			return rootSnapshot{}, fmt.Errorf("authorized workspace root is unavailable")
-		}
-		identity, idErr := platformFileIdentity(file)
-		closeErr := file.Close()
-		if idErr != nil || identity != root.identity {
-			return rootSnapshot{}, fmt.Errorf("authorized workspace root identity changed")
-		}
-		if closeErr != nil {
-			return rootSnapshot{}, closeErr
-		}
-		return root, nil
-	}
-	return rootSnapshot{}, fmt.Errorf("working directory is outside the authorized workspace")
-}
-
 func (s *Set) resolveTarget(ctx context.Context, in tools.Invocation, userPath string, mode targetMode) (*resolvedTarget, error) {
-	bound, err := s.snapshotWorkingDir(ctx, in.Scope.WorkingDir)
+	wd, err := workingDir(in, s.lim.MaxPathBytes)
 	if err != nil {
 		return nil, err
 	}
-	if expected, ok := boundFrom(ctx); ok {
-		if expected.setID != s.id || expected.cwd != filepath.Clean(in.Scope.WorkingDir) ||
-			expected.resolved != bound.resolved || expected.identity != bound.identity ||
-			expected.root.identity != bound.root.identity {
-			return nil, fmt.Errorf("working directory identity changed after binding")
-		}
+	boundary, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		return nil, fmt.Errorf("working directory is not accessible")
 	}
-	lexical, err := resolveUserPath(filepath.Clean(in.Scope.WorkingDir), userPath, s.lim.MaxPathBytes)
+	boundary = filepath.Clean(boundary)
+	lexical, err := resolveUserPath(wd, userPath, s.lim.MaxPathBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -153,14 +60,13 @@ func (s *Set) resolveTarget(ctx context.Context, in tools.Invocation, userPath s
 		return nil, err
 	}
 	result := &resolvedTarget{}
-	result.rootIdentity = bound.root.identity
 	if _, err := os.Lstat(lexical); err == nil {
 		resolved, err := filepath.EvalSymlinks(lexical)
 		if err != nil {
 			return nil, fmt.Errorf("path could not be resolved")
 		}
 		resolved = filepath.Clean(resolved)
-		if !pathWithin(bound.resolved, resolved) {
+		if !pathWithin(boundary, resolved) {
 			return nil, fmt.Errorf("resolved path is outside the working directory")
 		}
 		file, err := os.Open(resolved)
@@ -193,7 +99,7 @@ func (s *Set) resolveTarget(ctx context.Context, in tools.Invocation, userPath s
 			return nil, fmt.Errorf("parent directory does not exist")
 		}
 		parent = filepath.Clean(parent)
-		if !pathWithin(bound.resolved, parent) {
+		if !pathWithin(boundary, parent) {
 			return nil, fmt.Errorf("resolved parent is outside the working directory")
 		}
 		parentFile, err := os.Open(parent)

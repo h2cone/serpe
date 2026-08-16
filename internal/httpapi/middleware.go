@@ -2,15 +2,10 @@ package httpapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
-	"sort"
 	"strings"
 	"time"
 )
@@ -164,42 +159,6 @@ func queryPairCount(raw string) int {
 	return strings.Count(raw, "&") + 1
 }
 
-func (s *Server) authMW(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || r.URL.Path == "/api/health" || !s.authenticated {
-			next.ServeHTTP(w, r)
-			return
-		}
-		values := r.Header.Values("Authorization")
-		if len(values) != 1 || strings.ContainsRune(values[0], ',') {
-			unauthorized(w)
-			return
-		}
-		value := values[0]
-		space := strings.IndexByte(value, ' ')
-		if space <= 0 || !strings.EqualFold(value[:space], "Bearer") || space+1 >= len(value) || strings.ContainsRune(value[space+1:], ' ') {
-			unauthorized(w)
-			return
-		}
-		token := value[space+1:]
-		if validateBearerToken(token) != nil {
-			unauthorized(w)
-			return
-		}
-		digest := sha256.Sum256([]byte(token))
-		if subtle.ConstantTimeCompare(digest[:], s.authHash[:]) != 1 {
-			unauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func unauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", "Bearer")
-	writeAPIError(w, http.StatusUnauthorized, "unauthorized")
-}
-
 func (s *Server) requestAdmissionMW(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !tryPermit(s.requestPermits) {
@@ -222,102 +181,3 @@ func tryPermit(permits chan struct{}) bool {
 }
 
 func releasePermit(permits chan struct{}) { <-permits }
-
-func (s *Server) corsMW(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		_, allowed := s.origins[origin]
-		if origin != "" {
-			w.Header().Add("Vary", "Origin")
-			if !allowed {
-				writeAPIError(w, http.StatusForbidden, "origin_not_allowed")
-				return
-			}
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Expose-Headers", "X-Serpe-Next-Cursor, X-Request-ID")
-		}
-		if r.Method == http.MethodOptions {
-			if origin == "" || !allowed || !validPreflight(r) {
-				writeAPIError(w, http.StatusForbidden, "preflight_not_allowed")
-				return
-			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Request-ID")
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func validPreflight(r *http.Request) bool {
-	method := r.Header.Get("Access-Control-Request-Method")
-	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete:
-	default:
-		return false
-	}
-	allowed := map[string]struct{}{
-		"authorization": {}, "content-type": {}, "accept": {}, "x-request-id": {},
-	}
-	for _, header := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
-		header = strings.ToLower(strings.TrimSpace(header))
-		if header == "" {
-			continue
-		}
-		if _, ok := allowed[header]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func normalizeOrigins(values []string) (map[string]struct{}, error) {
-	out := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		normalized, err := normalizeOrigin(value)
-		if err != nil || normalized != value {
-			return nil, &configError{field: "AllowedOrigins"}
-		}
-		out[normalized] = struct{}{}
-	}
-	return out, nil
-}
-
-func normalizeOrigin(value string) (string, error) {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Opaque != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || parsed.Host == "" {
-		return "", errInvalidOrigin
-	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return "", errInvalidOrigin
-	}
-	hostname := parsed.Hostname()
-	if hostname == "" {
-		return "", errInvalidOrigin
-	}
-	if scheme == "http" {
-		ip := net.ParseIP(hostname)
-		if ip == nil || !ip.IsLoopback() {
-			return "", errInvalidOrigin
-		}
-	}
-	host := strings.ToLower(parsed.Host)
-	return scheme + "://" + host, nil
-}
-
-type configError struct{ field string }
-
-func (e *configError) Error() string { return "httpapi: invalid " + e.field }
-
-var errInvalidOrigin = &configError{field: "origin"}
-
-func sortedOriginKeys(origins map[string]struct{}) []string {
-	keys := make([]string, 0, len(origins))
-	for key := range origins {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
