@@ -61,16 +61,11 @@ func parseWriteArguments(in tools.Invocation, limit int64) (writeArguments, erro
 }
 
 func (t writeTool) Execute(ctx context.Context, in tools.Invocation) (tools.Output, error) {
-	args, err := parseWriteArguments(in, t.set.lim.MaxWriteBytes)
+	act, err := t.Activate(ctx, in)
 	if err != nil {
 		return tools.Output{}, err
 	}
-	target, err := t.set.resolveTarget(ctx, in, args.path, targetWrite)
-	if err != nil {
-		return pathFail(err)
-	}
-	defer target.close()
-	return t.executeResolved(ctx, in, target)
+	return executeActivated(ctx, act)
 }
 
 func (t writeTool) executeResolved(ctx context.Context, in tools.Invocation, target *resolvedTarget) (tools.Output, error) {

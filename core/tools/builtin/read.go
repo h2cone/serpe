@@ -86,16 +86,11 @@ func parseReadArguments(in tools.Invocation) (readArguments, error) {
 }
 
 func (t readTool) Execute(ctx context.Context, in tools.Invocation) (tools.Output, error) {
-	args, err := parseReadArguments(in)
+	act, err := t.Activate(ctx, in)
 	if err != nil {
 		return tools.Output{}, err
 	}
-	target, err := t.set.resolveTarget(ctx, in, args.path, targetRead)
-	if err != nil {
-		return pathFail(err)
-	}
-	defer target.close()
-	return t.executeResolved(ctx, in, target)
+	return executeActivated(ctx, act)
 }
 
 func (t readTool) executeResolved(ctx context.Context, in tools.Invocation, target *resolvedTarget) (tools.Output, error) {

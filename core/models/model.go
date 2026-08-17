@@ -10,11 +10,13 @@ type Model interface {
 	Stream(ctx context.Context, req *Request) (Stream, error)
 }
 
-// StreamLimitAcceptor starts a stream with caller-supplied limits that are no
-// weaker than the package hard ceilings. Built-in models implement this so
-// protocol reduction is bounded before cloning or accumulating event data.
+// StreamLimitAcceptor starts a stream or unary completion with caller-supplied
+// limits that are no weaker than the package hard ceilings. Built-in models
+// implement this so protocol reduction is bounded before cloning or
+// accumulating event data.
 type StreamLimitAcceptor interface {
 	StreamWithLimits(context.Context, *Request, StreamLimits) (Stream, error)
+	CompleteWithLimits(context.Context, *Request, StreamLimits) (*Response, error)
 }
 
 // Stream is a synchronous, pull-based sequence of normalized model events.

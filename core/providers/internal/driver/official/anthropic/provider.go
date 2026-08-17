@@ -98,6 +98,10 @@ func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *m
 }
 
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
+	return m.CompleteWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) CompleteWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "anthropic", "generate"); err != nil {
 		return nil, err
 	}
@@ -120,11 +124,11 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	if callErr != nil {
 		return nil, normalizeError(callErr, "generate", capture, m.provider.config.Redact)
 	}
-	decoded, err := defaultanthropic.DecodeResponseJSONWithLimits(raw, capture.RequestID(), m.provider.config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(m.provider.config.Limits, models.StreamLimits{}))
+	decoded, err := defaultanthropic.DecodeResponseJSONWithLimits(raw, capture.RequestID(), m.provider.config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 	if err != nil {
 		return nil, err
 	}
-	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, limits)
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {
@@ -170,7 +174,7 @@ func (m *upstreamModel) StreamWithLimits(ctx context.Context, req *models.Reques
 			cancel()
 			return stream.Close()
 		}), requestID, m.modelID, m.provider.config.Policy.IgnoreUnknownEvent, m.provider.config.Limits.MaxProviderStateBytes,
-		shared.EffectiveToolCallLimits(m.provider.config.Limits, limits))
+		shared.ToolCallLimitsFromStream(limits))
 	return models.NewStream(ctx, source,
 		models.WithStreamProvider("anthropic"),
 		models.WithStreamLimits(limits)), nil

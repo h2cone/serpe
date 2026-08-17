@@ -32,6 +32,12 @@ type Limits struct {
 	MaxRecords int
 }
 
+// DefaultLimits is the shared inspect ceiling used by tools, projection, and
+// tool-result downgrade.
+func DefaultLimits() Limits {
+	return Limits{MaxBytes: 7 << 20, MaxWidth: 8192, MaxHeight: 8192, MaxPixels: 40_000_000}
+}
+
 // Info is the validated container metadata.
 type Info struct {
 	MIMEType string

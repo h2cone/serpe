@@ -27,7 +27,7 @@ type Adapter struct {
 	BindModel        func(string) (string, error)
 	Route            func(string, bool) (string, url.Values)
 	Encode           func(string, *models.Request, bool, shared.Config) ([]byte, error)
-	Decode           func([]byte, string, string, shared.Config) (*models.Response, error)
+	Decode           func([]byte, string, string, shared.Config, models.StreamLimits) (*models.Response, error)
 	NewSource        func(*sse.Reader, string, string, shared.Config, models.StreamLimits) models.EventSource
 }
 
@@ -106,6 +106,10 @@ func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *m
 }
 
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
+	return m.CompleteWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) CompleteWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (*models.Response, error) {
 	response, err := m.send(ctx, req, false)
 	if err != nil {
 		return nil, err
@@ -115,11 +119,11 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := m.provider.adapter.Decode(raw, httpx.RequestID(response.Header), m.modelID, config)
+	decoded, err := m.provider.adapter.Decode(raw, httpx.RequestID(response.Header), m.modelID, config, limits)
 	if err != nil {
 		return nil, err
 	}
-	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, limits)
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {

@@ -42,7 +42,7 @@ type toolImageDecision struct {
 }
 
 func (r *Runner) adaptToolOutput(previous tools.Output) (tools.Output, error) {
-	if r == nil || r.tools == nil || !r.toolResultPolicyKnown {
+	if r == nil || r.tools == nil || !r.adaptImages {
 		return previous, nil
 	}
 	decisions := make([]toolImageDecision, len(previous.Content))
@@ -54,9 +54,7 @@ func (r *Runner) adaptToolOutput(previous tools.Output) (tools.Output, error) {
 			continue
 		}
 		imageCount++
-		info, err := imagecheck.Inspect(content.Image.MIMEType, content.Image.Data, imagecheck.Limits{
-			MaxBytes: 7 << 20, MaxWidth: 8192, MaxHeight: 8192, MaxPixels: 40_000_000,
-		})
+		info, err := imagecheck.Inspect(content.Image.MIMEType, content.Image.Data, imagecheck.DefaultLimits())
 		if err != nil {
 			return tools.Output{}, fmt.Errorf("sealed tool image failed validation: %w", err)
 		}

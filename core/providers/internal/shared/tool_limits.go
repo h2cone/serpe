@@ -2,8 +2,6 @@ package shared
 
 import (
 	"fmt"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/h2cone/serpe/core/models"
 )
@@ -18,6 +16,7 @@ const (
 
 // ToolCallLimits are protocol-decoder ceilings. They are applied before a
 // source grows a builder or publishes normalized events to models.Stream.
+// Identity and argument grammar use the same hard ceilings as tools.InputLimits.
 type ToolCallLimits struct {
 	MaxCalls              int
 	MaxCallIDBytes        int64
@@ -26,57 +25,27 @@ type ToolCallLimits struct {
 	MaxBatchArgumentBytes int64
 }
 
-// EffectiveToolCallLimits intersects provider transport ceilings with the
-// per-run stream ceilings supplied by runtime. Zero stream fields keep the
-// provider value, whose Config has already been normalized.
-func EffectiveToolCallLimits(provider Limits, stream models.StreamLimits) ToolCallLimits {
-	limits := ToolCallLimits{
-		MaxCalls:              positiveInt(provider.MaxToolCalls, hardMaxToolCalls),
-		MaxCallIDBytes:        positiveInt64(provider.MaxCallIDBytes, hardMaxCallIDBytes),
-		MaxToolNameBytes:      positiveInt64(provider.MaxToolNameBytes, hardMaxToolNameBytes),
-		MaxArgumentsBytes:     positiveInt64(provider.MaxArgumentsBytes, hardMaxArgumentsBytes),
-		MaxBatchArgumentBytes: positiveInt64(provider.MaxBatchArgumentBytes, hardMaxBatchArgumentBytes),
+// ToolCallLimitsFromStream uses the turn's MaxToolCalls and the package
+// tool-call grammar ceilings. Zero or negative MaxToolCalls keeps the hard
+// call ceiling.
+func ToolCallLimitsFromStream(stream models.StreamLimits) ToolCallLimits {
+	calls := stream.MaxToolCalls
+	if calls <= 0 {
+		calls = hardMaxToolCalls
 	}
-	limits.MaxCalls = tighterInt(limits.MaxCalls, stream.MaxToolCalls)
-	limits.MaxCallIDBytes = tighterInt64(limits.MaxCallIDBytes, stream.MaxCallIDBytes)
-	limits.MaxToolNameBytes = tighterInt64(limits.MaxToolNameBytes, stream.MaxToolNameBytes)
-	limits.MaxArgumentsBytes = tighterInt64(limits.MaxArgumentsBytes, stream.MaxArgumentsBytes)
-	limits.MaxBatchArgumentBytes = tighterInt64(limits.MaxBatchArgumentBytes, stream.MaxBatchArgumentBytes)
-	return limits
+	return ToolCallLimits{
+		MaxCalls:              calls,
+		MaxCallIDBytes:        hardMaxCallIDBytes,
+		MaxToolNameBytes:      hardMaxToolNameBytes,
+		MaxArgumentsBytes:     hardMaxArgumentsBytes,
+		MaxBatchArgumentBytes: hardMaxBatchArgumentBytes,
+	}
 }
 
 // DefaultToolCallLimits supplies hard ceilings to protocol fixtures that do
-// not pass an explicit normalized provider configuration.
+// not pass an explicit stream envelope.
 func DefaultToolCallLimits() ToolCallLimits {
-	return EffectiveToolCallLimits(Limits{}, models.StreamLimits{})
-}
-
-func positiveInt(value, fallback int) int {
-	if value > 0 {
-		return value
-	}
-	return fallback
-}
-
-func positiveInt64(value, fallback int64) int64 {
-	if value > 0 {
-		return value
-	}
-	return fallback
-}
-
-func tighterInt(current, candidate int) int {
-	if candidate > 0 && candidate < current {
-		return candidate
-	}
-	return current
-}
-
-func tighterInt64(current, candidate int64) int64 {
-	if candidate > 0 && candidate < current {
-		return candidate
-	}
-	return current
+	return ToolCallLimitsFromStream(models.StreamLimits{})
 }
 
 // ToolCallGuard accounts decoded calls and arguments before protocol-owned
@@ -111,10 +80,10 @@ func (g *ToolCallGuard) Start(key, id, name string) error {
 	if len(g.calls) >= g.limits.MaxCalls {
 		return fmt.Errorf("decoded tool call count exceeds %d", g.limits.MaxCalls)
 	}
-	if err := validateWireIdentity(id, g.limits.MaxCallIDBytes, true); err != nil {
+	if err := models.BoundedIdentity(id, g.limits.MaxCallIDBytes, true); err != nil {
 		return fmt.Errorf("decoded call ID: %w", err)
 	}
-	if err := validateWireIdentity(name, g.limits.MaxToolNameBytes, true); err != nil {
+	if err := models.BoundedIdentity(name, g.limits.MaxToolNameBytes, true); err != nil {
 		return fmt.Errorf("decoded tool name: %w", err)
 	}
 	g.calls[key] = &guardedCall{}
@@ -126,10 +95,10 @@ func (g *ToolCallGuard) Identity(key, id, name string) error {
 	if _, exists := g.calls[key]; !exists {
 		return fmt.Errorf("decoded tool call identity before start")
 	}
-	if err := validateWireIdentity(id, g.limits.MaxCallIDBytes, true); err != nil {
+	if err := models.BoundedIdentity(id, g.limits.MaxCallIDBytes, true); err != nil {
 		return fmt.Errorf("decoded call ID: %w", err)
 	}
-	if err := validateWireIdentity(name, g.limits.MaxToolNameBytes, true); err != nil {
+	if err := models.BoundedIdentity(name, g.limits.MaxToolNameBytes, true); err != nil {
 		return fmt.Errorf("decoded tool name: %w", err)
 	}
 	return nil
@@ -151,23 +120,5 @@ func (g *ToolCallGuard) AddArguments(key string, size int) error {
 	}
 	call.argumentBytes += addition
 	g.argumentBytes += addition
-	return nil
-}
-
-func validateWireIdentity(value string, limit int64, allowEmpty bool) error {
-	if value == "" && !allowEmpty {
-		return fmt.Errorf("is empty")
-	}
-	if !utf8.ValidString(value) {
-		return fmt.Errorf("is not valid UTF-8")
-	}
-	if int64(len(value)) > limit {
-		return fmt.Errorf("exceeds %d bytes", limit)
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("contains a control character")
-		}
-	}
 	return nil
 }

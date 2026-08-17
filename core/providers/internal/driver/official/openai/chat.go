@@ -45,10 +45,10 @@ func (a *chatAdapter) startStream(ctx context.Context, payload []byte, options [
 	return sdkhttp.StartStream(a.service.Completions.NewStreaming(ctx, params, options...))
 }
 
-func (*chatAdapter) decode(raw []byte, requestID string, config shared.Config) (*models.Response, error) {
-	return chatcompletions.DecodeResponseJSONWithLimits(raw, requestID, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
+func (*chatAdapter) decode(raw []byte, requestID string, config shared.Config, limits models.StreamLimits) (*models.Response, error) {
+	return chatcompletions.DecodeResponseJSONWithLimits(raw, requestID, shared.ToolCallLimitsFromStream(limits))
 }
 
 func (*chatAdapter) newSource(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
-	return chatcompletions.NewSSEStreamSource(reader, requestID, modelID, shared.EffectiveToolCallLimits(config.Limits, limits))
+	return chatcompletions.NewSSEStreamSource(reader, requestID, modelID, shared.ToolCallLimitsFromStream(limits))
 }

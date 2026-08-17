@@ -22,11 +22,11 @@ func NewGeminiGenerateContent(config shared.Config) *Provider {
 		Encode: func(_ string, req *models.Request, _ bool, config shared.Config) ([]byte, error) {
 			return google.EncodeRequest(req, config.Policy.LenientMapping, config.Limits.MaxProviderStateBytes)
 		},
-		Decode: func(raw []byte, requestID, modelID string, config shared.Config) (*models.Response, error) {
-			return google.DecodeResponseJSONWithLimits(raw, requestID, modelID, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, models.StreamLimits{}))
+		Decode: func(raw []byte, requestID, modelID string, config shared.Config, limits models.StreamLimits) (*models.Response, error) {
+			return google.DecodeResponseJSONWithLimits(raw, requestID, modelID, config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 		},
 		NewSource: func(reader *sse.Reader, requestID, modelID string, config shared.Config, limits models.StreamLimits) models.EventSource {
-			return google.NewSSEStreamSource(reader, requestID, modelID, config.Limits.MaxProviderStateBytes, shared.EffectiveToolCallLimits(config.Limits, limits))
+			return google.NewSSEStreamSource(reader, requestID, modelID, config.Limits.MaxProviderStateBytes, shared.ToolCallLimitsFromStream(limits))
 		},
 	})
 }

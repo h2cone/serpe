@@ -13,6 +13,12 @@ const (
 	minSessionMessageJSONBytes        = int64(4 << 10)
 )
 
+// NormalizeLimits applies package ceilings. Zero fields become those
+// ceilings; positive fields may only tighten them.
+func NormalizeLimits(limits Limits) (Limits, error) {
+	return normalizeLimits(limits)
+}
+
 func normalizeLimits(limits Limits) (Limits, error) {
 	value := limits.MaxSessionMessageJSONBytes
 	if value < 0 {

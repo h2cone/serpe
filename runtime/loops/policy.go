@@ -18,7 +18,8 @@ type afterModelAction int
 
 const (
 	afterModelComplete afterModelAction = iota
-	afterModelRunTools
+	afterModelRefuse
+	afterModelAdmit
 )
 
 type afterModel struct {
@@ -80,7 +81,7 @@ func classifyModelResponse(resp *models.Response) (afterModel, error) {
 		if len(calls) == 0 {
 			return afterModel{}, fmt.Errorf("%w: tool-call finish contains no tool calls", ErrInvalidModelResponse)
 		}
-		action = afterModelRunTools
+		action = afterModelAdmit
 	case models.FinishContentFilter:
 		if len(calls) != 0 {
 			return afterModel{}, modelTerminalError(resp, false)
@@ -88,6 +89,7 @@ func classifyModelResponse(resp *models.Response) (afterModel, error) {
 		if !candidateIsRefusal(candidate) {
 			return afterModel{}, modelTerminalError(resp, false)
 		}
+		action = afterModelRefuse
 	case models.FinishCancelled:
 		return afterModel{}, modelTerminalError(resp, true)
 	case models.FinishLength, models.FinishIncomplete, models.FinishError, models.FinishUnknown:

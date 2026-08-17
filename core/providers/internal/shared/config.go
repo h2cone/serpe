@@ -16,7 +16,7 @@ type Doer interface {
 // AuthenticateFunc applies provider authentication.
 type AuthenticateFunc func(context.Context, *http.Request) error
 
-// Limits are normalized positive byte limits.
+// Limits are normalized positive transport byte limits.
 type Limits struct {
 	MaxRequestBytes        int64
 	MaxResponseBytes       int64
@@ -24,11 +24,6 @@ type Limits struct {
 	MaxErrorResponseBytes  int64
 	MaxSSEEventBytes       int64
 	MaxProviderStateBytes  int64
-	MaxToolCalls           int
-	MaxCallIDBytes         int64
-	MaxToolNameBytes       int64
-	MaxArgumentsBytes      int64
-	MaxBatchArgumentBytes  int64
 }
 
 // Policy is a normalized internal policy snapshot.

@@ -69,18 +69,6 @@ func newConversation(req *models.Request, tools []models.Tool, limits Limits, po
 	}, nil
 }
 
-func (c *conversation) request(choice models.ToolChoice) (*models.Request, error) {
-	return c.requestWithAdditional(choice)
-}
-
-func (c *conversation) requestWithAdditional(choice models.ToolChoice, additional ...models.Message) (*models.Request, error) {
-	req, _, err := c.requestPlanned(context.Background(), choice, projectionPlan{
-		allowGroupDeletion: true,
-		detailedSummary:    true,
-	}, additional...)
-	return req, err
-}
-
 func (c *conversation) requestPlanned(ctx context.Context, choice models.ToolChoice, plan projectionPlan, additional ...models.Message) (*models.Request, projectionInfo, error) {
 	req := c.base.Clone()
 	req.ToolChoice = choice
@@ -106,12 +94,26 @@ func (c *conversation) toolChoice() models.ToolChoice {
 	return c.base.ToolChoice
 }
 
-func (c *conversation) appendAssistant(message models.Message) {
-	c.messages = append(c.messages, message)
+type pendingExchange struct {
+	assistant models.Message
+	results   []models.Content
 }
 
-func (c *conversation) appendToolResults(results []models.Content) {
-	c.messages = append(c.messages, models.NewUserMessage(results...))
+func (c *conversation) commitAssistant(message models.Message) error {
+	if err := message.Validate(); err != nil {
+		return fmt.Errorf("%w: assistant message: %v", ErrInvalidModelResponse, err)
+	}
+	c.messages = append(c.messages, message)
+	return nil
+}
+
+func (c *conversation) commitExchange(p pendingExchange) error {
+	result := models.NewUserMessage(p.results...)
+	if err := validateToolHistory([]models.Message{p.assistant, result}); err != nil {
+		return err
+	}
+	c.messages = append(c.messages, p.assistant, result)
+	return nil
 }
 
 func (c *conversation) snapshot() []models.Message {

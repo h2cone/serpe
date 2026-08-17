@@ -144,7 +144,7 @@ func (s *Server) securityMW(next http.Handler) http.Handler {
 		if index := strings.IndexByte(rawPath, '?'); index >= 0 {
 			rawPath = rawPath[:index]
 		}
-		if strings.HasPrefix(rawPath, "/api/sessions/") && (strings.ContainsRune(rawPath, '%') || strings.ContainsRune(rawPath, '\\')) {
+		if strings.HasPrefix(rawPath, "/api/") && (strings.ContainsRune(rawPath, '%') || strings.ContainsRune(rawPath, '\\')) {
 			writeAPIError(w, http.StatusBadRequest, "invalid_session_id")
 			return
 		}

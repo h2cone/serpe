@@ -50,5 +50,5 @@ func (r *Runner) prepareRequest(req *models.Request) (*conversation, error) {
 	if r.tools != nil {
 		defs = r.tools.Definitions()
 	}
-	return newConversation(req, defs, r.limits, r.toolResultPolicy, r.toolResultPolicyKnown)
+	return newConversation(req, defs, r.limits, r.toolResultPolicy, r.adaptImages)
 }

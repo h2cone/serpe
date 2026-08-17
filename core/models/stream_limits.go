@@ -9,20 +9,17 @@ import (
 	"github.com/h2cone/serpe/internal/jsonvalue"
 )
 
-// StreamLimits bound one normalized provider turn. Zero fields select the
-// package hard ceilings; positive fields may only tighten them.
+// StreamLimits bound one normalized provider turn's event envelope. Zero
+// fields select the package hard ceilings; positive fields may only tighten
+// them. Tool-call identity and argument grammar live in tools.InputLimits.
 type StreamLimits struct {
-	MaxEventBytes         int64
-	MaxTurnBytes          int64
-	MaxEvents             int
-	MaxCandidates         int
-	MaxParts              int
-	MaxMetadataEntries    int
-	MaxToolCalls          int
-	MaxCallIDBytes        int64
-	MaxToolNameBytes      int64
-	MaxArgumentsBytes     int64
-	MaxBatchArgumentBytes int64
+	MaxEventBytes      int64
+	MaxTurnBytes       int64
+	MaxEvents          int
+	MaxCandidates      int
+	MaxParts           int
+	MaxMetadataEntries int
+	MaxToolCalls       int
 }
 
 const (
@@ -33,13 +30,15 @@ const (
 	defaultStreamParts           = 4_096
 	defaultStreamMetadataEntries = 256
 	defaultStreamToolCalls       = 128
-	defaultStreamCallIDBytes     = int64(1_024)
-	defaultStreamToolNameBytes   = int64(1_024)
-	defaultStreamArgumentsBytes  = int64(16 << 20)
-	defaultStreamBatchArguments  = int64(16 << 20)
 	maxTerminalFinishes          = 8
 	streamFrameNodeBytes         = int64(16)
 )
+
+// NormalizeStreamLimits applies package ceilings. Zero fields become those
+// ceilings; positive fields may only tighten them.
+func NormalizeStreamLimits(limits StreamLimits) (StreamLimits, error) {
+	return normalizeStreamLimits(limits)
+}
 
 func normalizeStreamLimits(limits StreamLimits) (StreamLimits, error) {
 	var err error
@@ -66,21 +65,6 @@ func normalizeStreamLimits(limits StreamLimits) (StreamLimits, error) {
 	}
 	if limits.MaxToolCalls, err = streamIntLimit(limits.MaxToolCalls, defaultStreamToolCalls, 1, "MaxToolCalls"); err != nil {
 		return StreamLimits{}, err
-	}
-	if limits.MaxCallIDBytes, err = streamInt64Limit(limits.MaxCallIDBytes, defaultStreamCallIDBytes, 1, "MaxCallIDBytes"); err != nil {
-		return StreamLimits{}, err
-	}
-	if limits.MaxToolNameBytes, err = streamInt64Limit(limits.MaxToolNameBytes, defaultStreamToolNameBytes, 1, "MaxToolNameBytes"); err != nil {
-		return StreamLimits{}, err
-	}
-	if limits.MaxArgumentsBytes, err = streamInt64Limit(limits.MaxArgumentsBytes, defaultStreamArgumentsBytes, 2, "MaxArgumentsBytes"); err != nil {
-		return StreamLimits{}, err
-	}
-	if limits.MaxBatchArgumentBytes, err = streamInt64Limit(limits.MaxBatchArgumentBytes, defaultStreamBatchArguments, 2, "MaxBatchArgumentBytes"); err != nil {
-		return StreamLimits{}, err
-	}
-	if limits.MaxBatchArgumentBytes < 2*int64(limits.MaxToolCalls) {
-		return StreamLimits{}, fmt.Errorf("MaxBatchArgumentBytes cannot hold a minimal object for each tool call")
 	}
 	return limits, nil
 }
@@ -117,18 +101,15 @@ type streamLimiter struct {
 	turnBytes       int64
 	metadataEntries int
 	toolCalls       int
-	argumentBytes   int64
 	candidates      map[int]struct{}
 	parts           map[partKey]ContentKind
-	partArguments   map[partKey]int64
 }
 
 func newStreamLimiter(limits StreamLimits) *streamLimiter {
 	return &streamLimiter{
-		limits:        limits,
-		candidates:    make(map[int]struct{}),
-		parts:         make(map[partKey]ContentKind),
-		partArguments: make(map[partKey]int64),
+		limits:     limits,
+		candidates: make(map[int]struct{}),
+		parts:      make(map[partKey]ContentKind),
 	}
 }
 
@@ -219,29 +200,7 @@ func (l *streamLimiter) acceptStructure(event Event) error {
 		if l.toolCalls >= l.limits.MaxToolCalls {
 			return fmt.Errorf("model tool call count exceeds %d", l.limits.MaxToolCalls)
 		}
-		call := event.Part.ToolCall
-		if err := validateBoundedIdentity(call.ID, l.limits.MaxCallIDBytes, true); err != nil {
-			return fmt.Errorf("tool call ID: %w", err)
-		}
-		if err := validateBoundedIdentity(call.Name, l.limits.MaxToolNameBytes, false); err != nil {
-			return fmt.Errorf("tool call name: %w", err)
-		}
-		args := int64(len(call.Arguments))
-		if args > l.limits.MaxArgumentsBytes || args > l.limits.MaxBatchArgumentBytes-l.argumentBytes {
-			return fmt.Errorf("model tool arguments exceed configured limit")
-		}
 		l.toolCalls++
-		l.argumentBytes += args
-		l.partArguments[key] = args
-	}
-	if event.Kind == EventPartDelta && event.Delta.Kind == DeltaToolArguments {
-		addition := int64(len(event.Delta.Text))
-		partTotal := l.partArguments[key]
-		if addition > l.limits.MaxArgumentsBytes-partTotal || addition > l.limits.MaxBatchArgumentBytes-l.argumentBytes {
-			return fmt.Errorf("model tool arguments exceed configured limit")
-		}
-		l.partArguments[key] = partTotal + addition
-		l.argumentBytes += addition
 	}
 
 	l.metadataEntries += metadata
@@ -256,7 +215,8 @@ func (l *streamLimiter) acceptStructure(event Event) error {
 	return nil
 }
 
-func validateBoundedIdentity(value string, limit int64, allowEmpty bool) error {
+// BoundedIdentity checks UTF-8, control characters, and a byte ceiling.
+func BoundedIdentity(value string, limit int64, allowEmpty bool) error {
 	if !allowEmpty && value == "" {
 		return fmt.Errorf("is empty")
 	}

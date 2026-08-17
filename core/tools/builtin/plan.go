@@ -12,8 +12,6 @@ import (
 	"github.com/h2cone/serpe/core/tools"
 )
 
-const rootResource = "serpe.tools.root.v1"
-
 func lexicalClaim(wd, user string, access tools.Access) tools.Claim {
 	cleanWD := filepath.Clean(wd)
 	clean := filepath.Clean(user)
@@ -71,8 +69,14 @@ func (t editTool) Plan(_ context.Context, in tools.Invocation) (tools.Plan, erro
 	return planPath(in, path, t.set.lim.MaxPathBytes, tools.AccessWrite)
 }
 
-func (bashTool) Plan(context.Context, tools.Invocation) (tools.Plan, error) {
-	return tools.Plan{Claims: []tools.Claim{{Resource: rootResource, Access: tools.AccessWrite}}}, nil
+func executeActivated(ctx context.Context, act tools.Activation) (tools.Output, error) {
+	if act.Close != nil {
+		defer func() { _ = act.Close() }()
+	}
+	if act.Run == nil {
+		return tools.Output{}, errors.New("activation is missing Run")
+	}
+	return act.Run(ctx)
 }
 
 func (t readTool) Activate(ctx context.Context, in tools.Invocation) (tools.Activation, error) {

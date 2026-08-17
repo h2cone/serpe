@@ -26,7 +26,7 @@ type protocolAdapter interface {
 	encode(modelID string, request *models.Request, stream bool, config shared.Config) ([]byte, error)
 	complete(context.Context, []byte, []option.RequestOption) ([]byte, error)
 	startStream(context.Context, []byte, []option.RequestOption) (func() error, error)
-	decode([]byte, string, shared.Config) (*models.Response, error)
+	decode([]byte, string, shared.Config, models.StreamLimits) (*models.Response, error)
 	newSource(*sse.Reader, string, string, shared.Config, models.StreamLimits) models.EventSource
 }
 
@@ -109,6 +109,10 @@ func (m *upstreamModel) EncodedRequestSizeUpperBound(ctx context.Context, req *m
 }
 
 func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*models.Response, error) {
+	return m.CompleteWithLimits(ctx, req, models.StreamLimits{})
+}
+
+func (m *upstreamModel) CompleteWithLimits(ctx context.Context, req *models.Request, limits models.StreamLimits) (*models.Response, error) {
 	if err := sdkhttp.ValidateCall(ctx, req, "openai", "generate"); err != nil {
 		return nil, err
 	}
@@ -133,11 +137,11 @@ func (m *upstreamModel) Complete(ctx context.Context, req *models.Request) (*mod
 	if callErr != nil {
 		return nil, normalizeError(callErr, "generate", capture, m.provider.config.Redact)
 	}
-	decoded, err := m.provider.adapter.decode(raw, capture.RequestID(), m.provider.config)
+	decoded, err := m.provider.adapter.decode(raw, capture.RequestID(), m.provider.config, limits)
 	if err != nil {
 		return nil, err
 	}
-	return models.ApplyStreamLimitsToResponse(ctx, decoded, models.StreamLimits{})
+	return models.ApplyStreamLimitsToResponse(ctx, decoded, limits)
 }
 
 func (m *upstreamModel) Stream(ctx context.Context, req *models.Request) (models.Stream, error) {

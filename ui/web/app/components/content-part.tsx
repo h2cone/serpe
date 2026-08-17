@@ -57,7 +57,7 @@ const inlineImageMIMEs = new Set([
   "image/gif",
   "image/webp",
 ]);
-const maxInlineImageBytes = 16 << 20;
+const maxInlineImageBytes = 7 << 20;
 const canonicalBase64 =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 

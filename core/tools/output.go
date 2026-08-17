@@ -619,34 +619,6 @@ func materialize(blocks []contentBlock) ([]models.Content, error) {
 	return out, nil
 }
 
-func frameBlocks(blocks []contentBlock) []byte {
-	var e frameEnc
-	e.str(outputDomain)
-	e.u64(outputVersion)
-	e.u64(uint64(len(blocks)))
-	for i, b := range blocks {
-		e.u64(uint64(i))
-		e.str(string(b.kind))
-		e.str(b.mime)
-		e.str(string(b.detail))
-		payload := []byte(b.text)
-		if b.kind == models.ContentImage {
-			payload = b.data
-		}
-		for off := 0; off < len(payload); off += frameChunk {
-			end := off + frameChunk
-			if end > len(payload) {
-				end = len(payload)
-			}
-			e.bytes(payload[off:end])
-		}
-		e.u64(0)
-		e.u64(uint64(len(payload)))
-		e.str(blockBoundary)
-	}
-	return e.buf
-}
-
 func digestBlocks(blocks []contentBlock) (int64, string, error) {
 	enc := frameHashEnc{h: sha256.New()}
 	if !enc.str(outputDomain) || !enc.u64(outputVersion) || !enc.u64(uint64(len(blocks))) {

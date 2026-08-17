@@ -28,19 +28,8 @@ func validToolName(name string) bool {
 }
 
 func validCallID(id string, maxBytes int64) error {
-	if id == "" {
-		return fmt.Errorf("call id is empty")
-	}
-	if !utf8.ValidString(id) {
-		return fmt.Errorf("call id is not valid UTF-8")
-	}
-	if int64(len(id)) > maxBytes {
-		return fmt.Errorf("call id exceeds %d bytes", maxBytes)
-	}
-	for _, r := range id {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("call id contains a control character")
-		}
+	if err := models.BoundedIdentity(id, maxBytes, false); err != nil {
+		return fmt.Errorf("call id %v", err)
 	}
 	return nil
 }

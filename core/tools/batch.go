@@ -519,11 +519,7 @@ func (b *Batch) fail(pc preparedCall, started bool, err error) {
 	b.fatals = append(b.fatals, batchFatal{index: pc.index, err: err})
 	b.mu.Unlock()
 	b.setSlot(pc.index, BatchResult{State: ResultFailed, Err: err})
-	if started {
-		b.send(BatchEvent{Kind: BatchFailed, Index: pc.index, Call: cloneCall(pc.call), Err: err})
-	} else {
-		b.send(BatchEvent{Kind: BatchFailed, Index: pc.index, Call: cloneCall(pc.call), Err: err})
-	}
+	b.send(BatchEvent{Kind: BatchFailed, Index: pc.index, Call: cloneCall(pc.call), Err: err})
 	b.exec.coord.release(pc.ticket)
 }
 
@@ -565,12 +561,6 @@ func (b *Batch) setSlot(i int, r BatchResult) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.slots[i] = r
-}
-
-func (b *Batch) skipAll() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.skipAllLocked()
 }
 
 func (b *Batch) skipAllLocked() {

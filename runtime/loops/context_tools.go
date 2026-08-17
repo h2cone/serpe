@@ -418,9 +418,7 @@ func projectedImageReason(image *models.ImageContent, policy models.ToolResultPo
 	if int64(len(image.Data)) > policy.MaxRawImageBytes {
 		return "image_bytes_exceeded", imagecheck.Info{}
 	}
-	info, err := imagecheck.Inspect(image.MIMEType, image.Data, imagecheck.Limits{
-		MaxBytes: 7 << 20, MaxWidth: 8192, MaxHeight: 8192, MaxPixels: 40_000_000,
-	})
+	info, err := imagecheck.Inspect(image.MIMEType, image.Data, imagecheck.DefaultLimits())
 	if err != nil {
 		return "invalid_image", imagecheck.Info{}
 	}
@@ -675,9 +673,7 @@ func toolHistorySummary(ctx context.Context, messages []models.Message, dropped 
 				}
 				info := imagecheck.Info{}
 				if len(child.Image.Data) > 0 {
-					if inspected, inspectErr := imagecheck.Inspect(child.Image.MIMEType, child.Image.Data, imagecheck.Limits{
-						MaxBytes: 7 << 20, MaxWidth: 8192, MaxHeight: 8192, MaxPixels: 40_000_000,
-					}); inspectErr == nil {
+					if inspected, inspectErr := imagecheck.Inspect(child.Image.MIMEType, child.Image.Data, imagecheck.DefaultLimits()); inspectErr == nil {
 						info = inspected
 					}
 				}

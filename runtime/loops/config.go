@@ -7,6 +7,7 @@ import (
 
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/tools"
+	"github.com/h2cone/serpe/runtime/sessions"
 )
 
 // Config constructs an immutable Runner.
@@ -18,22 +19,19 @@ type Config struct {
 
 // Limits bounds a single run. Zero values for MaxModelTurns, MaxToolCalls, and
 // MaxIdenticalSteps use safe defaults and cannot disable those bounds.
-// MaxObservedTokens zero disables the observed-token limit.
+// MaxObservedTokens zero disables the observed-token limit. Stream carries
+// one-turn event envelope limits; MaxToolCalls is the run-lifetime executed
+// call counter.
 type Limits struct {
-	MaxModelTurns              int
-	MaxToolCalls               int
-	MaxObservedTokens          int64
-	MaxIdenticalSteps          int
-	MaxModelEventBytes         int64
-	MaxModelTurnBytes          int64
-	MaxModelEvents             int
-	MaxModelCandidates         int
-	MaxModelParts              int
-	MaxModelMetadataEntries    int
-	MaxSessionMessageJSONBytes int64
-	MaxRetainedToolBytes       int64
-	MaxCanonicalToolBytes      int64
-	Context                    ContextLimits
+	MaxModelTurns     int
+	MaxToolCalls      int
+	MaxObservedTokens int64
+	MaxIdenticalSteps int
+	Stream            models.StreamLimits
+	sessions.Limits
+	MaxRetainedToolBytes  int64
+	MaxCanonicalToolBytes int64
+	Context               ContextLimits
 }
 
 // ContextLimits bound only the request projection sent to a model. They do
@@ -49,21 +47,11 @@ const (
 	defaultMaxModelTurns                   = 32
 	defaultMaxToolCalls                    = 128
 	defaultMaxIdenticalSteps               = 3
-	defaultMaxModelEventBytes              = int64(2 << 20)
-	defaultMaxModelTurnBytes               = int64(32 << 20)
-	defaultMaxModelEvents                  = 65_536
-	defaultMaxModelCandidates              = 8
-	defaultMaxModelParts                   = 4_096
-	defaultMaxModelMetadataEntries         = 256
-	defaultMaxSessionMessageJSONBytes      = int64(47 << 20)
 	defaultMaxRetainedToolBytes            = int64(64 << 20)
 	defaultMaxCanonicalToolBytes           = int64(256 << 20)
 	defaultMaxToolCallArgumentContextBytes = int64(16 << 20)
 	defaultMaxToolTextContextBytes         = int64(256 << 10)
 	defaultMaxToolImageContextBytes        = int64(7 << 20)
-	minModelEventBytes                     = int64(512)
-	minModelTurnBytes                      = int64(1 << 10)
-	minSessionMessageJSONBytes             = int64(4 << 10)
 	minToolContextTextBytes                = int64(16 << 10)
 	minToolBudgetBytes                     = int64(4 << 10)
 )
@@ -75,11 +63,11 @@ type Runner struct {
 	tools                  *tools.Executor
 	limits                 Limits
 	capabilities           models.CapabilitySet
-	capabilitiesKnown      bool
+	rejectParallel         bool
 	requestBudget          models.RequestBudgetReporter
 	maxEncodedRequestBytes int64
 	toolResultPolicy       models.ToolResultPolicy
-	toolResultPolicyKnown  bool
+	adaptImages            bool
 	allowToolGroupDeletion bool
 }
 
@@ -101,11 +89,11 @@ func New(config Config) (*Runner, error) {
 		tools:                  config.Tools,
 		limits:                 limits,
 		capabilities:           contract.capabilities,
-		capabilitiesKnown:      contract.capabilitiesKnown,
+		rejectParallel:         contract.rejectParallel,
 		requestBudget:          contract.requestBudget,
 		maxEncodedRequestBytes: contract.maxEncodedRequestBytes,
 		toolResultPolicy:       contract.toolResultPolicy,
-		toolResultPolicyKnown:  contract.toolResultPolicyKnown,
+		adaptImages:            contract.adaptImages,
 		allowToolGroupDeletion: contract.allowToolGroupDeletion,
 	}, nil
 }
@@ -130,16 +118,17 @@ func (r *Runner) ToolDefinitions() []models.Tool {
 
 type modelContract struct {
 	capabilities           models.CapabilitySet
-	capabilitiesKnown      bool
+	rejectParallel         bool
 	requestBudget          models.RequestBudgetReporter
 	maxEncodedRequestBytes int64
 	toolResultPolicy       models.ToolResultPolicy
-	toolResultPolicyKnown  bool
+	adaptImages            bool
 	allowToolGroupDeletion bool
 }
 
 func inspectModelContract(model models.Model, exec *tools.Executor) (modelContract, error) {
 	contract := modelContract{allowToolGroupDeletion: true}
+	capsKnown := false
 
 	if reporter, ok := model.(models.CapabilityReporter); ok {
 		if isNilDynamic(reporter) {
@@ -150,7 +139,8 @@ func inspectModelContract(model models.Model, exec *tools.Executor) (modelContra
 			return modelContract{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 		}
 		contract.capabilities = capabilities
-		contract.capabilitiesKnown = true
+		contract.rejectParallel = !capabilities.Has(models.CapabilityParallelTools)
+		capsKnown = true
 		if _, ok := model.(models.StreamLimitAcceptor); !ok {
 			return modelContract{}, fmt.Errorf("%w: model is missing StreamLimitAcceptor", ErrInvalidConfig)
 		}
@@ -169,7 +159,7 @@ func inspectModelContract(model models.Model, exec *tools.Executor) (modelContra
 		}
 		contract.requestBudget = reporter
 		contract.maxEncodedRequestBytes = maximum
-	} else if contract.capabilitiesKnown {
+	} else if capsKnown {
 		return modelContract{}, fmt.Errorf("%w: model is missing RequestBudgetReporter", ErrInvalidConfig)
 	}
 
@@ -202,17 +192,17 @@ func inspectModelContract(model models.Model, exec *tools.Executor) (modelContra
 			if err != nil {
 				return modelContract{}, err
 			}
-			if policy.InlineImages && contract.capabilitiesKnown && !contract.capabilities.Has(models.CapabilityToolResultImage) {
+			if policy.InlineImages && capsKnown && !contract.capabilities.Has(models.CapabilityToolResultImage) {
 				return modelContract{}, fmt.Errorf("%w: tool-result image policy exceeds model capabilities", ErrInvalidConfig)
 			}
 			contract.toolResultPolicy = policy
 		}
-		contract.toolResultPolicyKnown = true
-	} else if contract.capabilitiesKnown {
-		contract.toolResultPolicyKnown = true
+		contract.adaptImages = true
+	} else if capsKnown {
 		if contract.capabilities.Has(models.CapabilityToolResultImage) {
 			return modelContract{}, fmt.Errorf("%w: model is missing ToolResultPolicyReporter", ErrInvalidConfig)
 		}
+		contract.adaptImages = true
 	}
 
 	var defs []models.Tool
@@ -222,7 +212,7 @@ func inspectModelContract(model models.Model, exec *tools.Executor) (modelContra
 	if len(defs) == 0 {
 		return contract, nil
 	}
-	if contract.capabilitiesKnown && !contract.capabilities.Has(models.CapabilityTools) {
+	if capsKnown && !contract.capabilities.Has(models.CapabilityTools) {
 		return modelContract{}, fmt.Errorf("%w: model does not support tools", ErrInvalidConfig)
 	}
 	if validator, ok := model.(models.ToolDefinitionValidator); ok {
@@ -232,7 +222,7 @@ func inspectModelContract(model models.Model, exec *tools.Executor) (modelContra
 		if err := callDefinitionValidator(validator, defs); err != nil {
 			return modelContract{}, fmt.Errorf("%w: tool definitions: %v", ErrInvalidConfig, err)
 		}
-	} else if contract.capabilitiesKnown {
+	} else if capsKnown {
 		return modelContract{}, fmt.Errorf("%w: model is missing ToolDefinitionValidator", ErrInvalidConfig)
 	}
 	return contract, nil
@@ -275,20 +265,6 @@ func callToolResultPolicy(reporter models.ToolResultPolicyReporter) (policy mode
 	return policy, reported, nil
 }
 
-func (r *Runner) validateEncodedRequest(ctx context.Context, req *models.Request) error {
-	if r == nil || r.requestBudget == nil {
-		return nil
-	}
-	size, err := r.encodedRequestSizeUpperBound(ctx, req)
-	if err != nil {
-		return err
-	}
-	if size > r.maxEncodedRequestBytes {
-		return fmt.Errorf("%w: encoded model request upper bound %d exceeds %d bytes", ErrRunLimit, size, r.maxEncodedRequestBytes)
-	}
-	return nil
-}
-
 // prepareModelRequest projects canonical history and, when the model exposes
 // an encoded-size reporter, performs the bounded deterministic contraction
 // sequence before any network call or new tool side effect.
@@ -320,19 +296,13 @@ func (r *Runner) prepareModelRequest(ctx context.Context, conversation *conversa
 	if size <= r.maxEncodedRequestBytes {
 		return req, size, nil
 	}
-	attempts := 1
 	lastSize := size
-
-	// First collapse older retained results and optional summary detail in one
-	// deterministic step. The newest completed exchange remains untouched.
-	if initial.retainedGroups > 1 || initial.droppedGroups > 0 {
-		plan.detailedSummary = false
-		plan.omitOlderResults = true
-		req, _, err = conversation.requestPlanned(ctx, choice, plan, additional...)
+	plans := contractionPlans(plan, initial, r.allowToolGroupDeletion)
+	for i, candidate := range plans {
+		req, _, err = conversation.requestPlanned(ctx, choice, candidate, additional...)
 		if err != nil {
 			return nil, 0, err
 		}
-		attempts++
 		lastSize, err = measure(req)
 		if err != nil {
 			return nil, 0, err
@@ -340,50 +310,42 @@ func (r *Runner) prepareModelRequest(ctx context.Context, conversation *conversa
 		if lastSize <= r.maxEncodedRequestBytes {
 			return req, lastSize, nil
 		}
+		if i+1 >= 19 {
+			break
+		}
 	}
+	return nil, 0, fmt.Errorf("%w: encoded model request upper bound %d exceeds %d bytes after %d deterministic projections",
+		ErrRunLimit, lastSize, r.maxEncodedRequestBytes, 1+len(plans))
+}
 
+func contractionPlans(base projectionPlan, initial projectionInfo, allowDelete bool) []projectionPlan {
+	var plans []projectionPlan
+	if initial.retainedGroups > 1 || initial.droppedGroups > 0 {
+		next := base
+		next.detailedSummary = false
+		next.omitOlderResults = true
+		plans = append(plans, next)
+		base = next
+	}
 	maxDeletes := initial.retainedGroups - 1
 	if maxDeletes > 15 {
 		maxDeletes = 15
 	}
-	if !r.allowToolGroupDeletion {
+	if !allowDelete {
 		maxDeletes = 0
 	}
-	for deleted := 1; deleted <= maxDeletes && attempts < 20; deleted++ {
-		plan.dropOldestRetained = deleted
-		req, _, err = conversation.requestPlanned(ctx, choice, plan, additional...)
-		if err != nil {
-			return nil, 0, err
-		}
-		attempts++
-		lastSize, err = measure(req)
-		if err != nil {
-			return nil, 0, err
-		}
-		if lastSize <= r.maxEncodedRequestBytes {
-			return req, lastSize, nil
-		}
+	for deleted := 1; deleted <= maxDeletes; deleted++ {
+		next := base
+		next.dropOldestRetained = deleted
+		plans = append(plans, next)
+		base = next
 	}
-
-	// Latest results are the final legal contraction. Their assistant call,
-	// arguments, content, and provider state remain byte-for-byte unchanged.
-	if initial.retainedGroups > 0 && attempts < 20 {
-		plan.omitLatestResults = true
-		req, _, err = conversation.requestPlanned(ctx, choice, plan, additional...)
-		if err != nil {
-			return nil, 0, err
-		}
-		attempts++
-		lastSize, err = measure(req)
-		if err != nil {
-			return nil, 0, err
-		}
-		if lastSize <= r.maxEncodedRequestBytes {
-			return req, lastSize, nil
-		}
+	if initial.retainedGroups > 0 {
+		next := base
+		next.omitLatestResults = true
+		plans = append(plans, next)
 	}
-	return nil, 0, fmt.Errorf("%w: encoded model request upper bound %d exceeds %d bytes after %d deterministic projections",
-		ErrRunLimit, lastSize, r.maxEncodedRequestBytes, attempts)
+	return plans
 }
 
 func (r *Runner) encodedRequestSizeUpperBound(ctx context.Context, req *models.Request) (int64, error) {
@@ -501,9 +463,7 @@ func callDefinitionValidator(v models.ToolDefinitionValidator, defs []models.Too
 func normalizeLimits(limits Limits, executor *tools.Executor) (Limits, error) {
 	toolCallsConfigured := limits.MaxToolCalls != 0
 	if limits.MaxModelTurns < 0 || limits.MaxToolCalls < 0 || limits.MaxObservedTokens < 0 || limits.MaxIdenticalSteps < 0 ||
-		limits.MaxModelEventBytes < 0 || limits.MaxModelTurnBytes < 0 || limits.MaxModelEvents < 0 ||
-		limits.MaxModelCandidates < 0 || limits.MaxModelParts < 0 || limits.MaxModelMetadataEntries < 0 ||
-		limits.MaxSessionMessageJSONBytes < 0 || limits.MaxRetainedToolBytes < 0 || limits.MaxCanonicalToolBytes < 0 {
+		limits.MaxRetainedToolBytes < 0 || limits.MaxCanonicalToolBytes < 0 {
 		return Limits{}, fmt.Errorf("%w: limits must not be negative", ErrInvalidConfig)
 	}
 	if limits.MaxModelTurns == 0 {
@@ -515,31 +475,16 @@ func normalizeLimits(limits Limits, executor *tools.Executor) (Limits, error) {
 	if limits.MaxIdenticalSteps == 0 {
 		limits.MaxIdenticalSteps = defaultMaxIdenticalSteps
 	}
-	var err error
-	if limits.MaxModelEventBytes, err = normalizeInt64Limit(limits.MaxModelEventBytes, defaultMaxModelEventBytes, minModelEventBytes, "MaxModelEventBytes"); err != nil {
+	stream, err := models.NormalizeStreamLimits(limits.Stream)
+	if err != nil {
+		return Limits{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	limits.Stream = stream
+	sessionLimits, err := normalizeSessionLimits(limits.Limits)
+	if err != nil {
 		return Limits{}, err
 	}
-	if limits.MaxModelTurnBytes, err = normalizeInt64Limit(limits.MaxModelTurnBytes, defaultMaxModelTurnBytes, minModelTurnBytes, "MaxModelTurnBytes"); err != nil {
-		return Limits{}, err
-	}
-	if limits.MaxModelTurnBytes < limits.MaxModelEventBytes {
-		return Limits{}, fmt.Errorf("%w: MaxModelTurnBytes must be at least MaxModelEventBytes", ErrInvalidConfig)
-	}
-	if limits.MaxModelEvents, err = normalizeIntLimit(limits.MaxModelEvents, defaultMaxModelEvents, 2, "MaxModelEvents"); err != nil {
-		return Limits{}, err
-	}
-	if limits.MaxModelCandidates, err = normalizeIntLimit(limits.MaxModelCandidates, defaultMaxModelCandidates, 1, "MaxModelCandidates"); err != nil {
-		return Limits{}, err
-	}
-	if limits.MaxModelParts, err = normalizeIntLimit(limits.MaxModelParts, defaultMaxModelParts, 1, "MaxModelParts"); err != nil {
-		return Limits{}, err
-	}
-	if limits.MaxModelMetadataEntries, err = normalizeIntLimit(limits.MaxModelMetadataEntries, defaultMaxModelMetadataEntries, 1, "MaxModelMetadataEntries"); err != nil {
-		return Limits{}, err
-	}
-	if limits.MaxSessionMessageJSONBytes, err = normalizeInt64Limit(limits.MaxSessionMessageJSONBytes, defaultMaxSessionMessageJSONBytes, minSessionMessageJSONBytes, "MaxSessionMessageJSONBytes"); err != nil {
-		return Limits{}, err
-	}
+	limits.Limits = sessionLimits
 	if limits.MaxRetainedToolBytes, err = normalizeInt64Limit(limits.MaxRetainedToolBytes, defaultMaxRetainedToolBytes, 1, "MaxRetainedToolBytes"); err != nil {
 		return Limits{}, err
 	}
@@ -567,23 +512,28 @@ func normalizeLimits(limits Limits, executor *tools.Executor) (Limits, error) {
 	return limits, nil
 }
 
-func (r *Runner) modelStreamLimits() models.StreamLimits {
-	limits := models.StreamLimits{
-		MaxEventBytes:      r.limits.MaxModelEventBytes,
-		MaxTurnBytes:       r.limits.MaxModelTurnBytes,
-		MaxEvents:          r.limits.MaxModelEvents,
-		MaxCandidates:      r.limits.MaxModelCandidates,
-		MaxParts:           r.limits.MaxModelParts,
-		MaxMetadataEntries: r.limits.MaxModelMetadataEntries,
+func normalizeSessionLimits(limits sessions.Limits) (sessions.Limits, error) {
+	normalized, err := sessions.NormalizeLimits(limits)
+	if err != nil {
+		return sessions.Limits{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	return normalized, nil
+}
+
+func (r *Runner) modelStreamLimits(remainingToolCalls int) models.StreamLimits {
+	limits := r.limits.Stream
+	turnCalls := remainingToolCalls
+	if turnCalls < 1 {
+		// Zero would normalize to the package ceiling and reopen a 128-call turn.
+		turnCalls = 1
 	}
 	if r.tools != nil {
 		input, _ := r.tools.Limits()
-		limits.MaxToolCalls = input.MaxCalls
-		limits.MaxCallIDBytes = input.MaxCallIDBytes
-		limits.MaxToolNameBytes = input.MaxToolNameBytes
-		limits.MaxArgumentsBytes = input.MaxArgumentsBytes
-		limits.MaxBatchArgumentBytes = input.MaxBatchArgumentBytes
+		if input.MaxCalls < turnCalls {
+			turnCalls = input.MaxCalls
+		}
 	}
+	limits.MaxToolCalls = turnCalls
 	return limits
 }
 
