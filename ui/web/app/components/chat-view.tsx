@@ -12,8 +12,11 @@ import {
   type TranscriptState,
 } from "~/lib/transcript";
 import type { Message, SessionSummary } from "~/lib/wire";
+import { pendingPromptKey } from "~/lib/prefs";
 import { Composer } from "./composer";
 import { ContentPartView, ToolCallCard } from "./content-part";
+
+const startedPending = new Set<string>();
 
 export function ChatView({
   meta,
@@ -81,7 +84,7 @@ export function ChatView({
 
   const send = useCallback(
     async (prompt: string) => {
-      if (!prompt.trim() || state.streaming) return;
+      if (!prompt.trim() || state.streaming) return false;
       const ac = new AbortController();
       abortRef.current = ac;
       setRunNotice(null);
@@ -97,24 +100,38 @@ export function ChatView({
         }
         if (terminalIssue) setRunNotice(terminalIssue);
         revalidator.revalidate();
+        return true;
       } catch (e) {
         if ((e as Error).name === "AbortError") {
           const message = "Run cancelled. The session was reloaded to verify its committed state.";
           setRunNotice(message);
           setState((s) => failStream(s, message, "cancelled"));
-        } else {
-          const message =
-            e instanceof Error ? e.message : "The run stream failed.";
-          setRunNotice(message);
-          setState((s) => failStream(s, message));
+          revalidator.revalidate();
+          return false;
         }
+        const message =
+          e instanceof Error ? e.message : "The run stream failed.";
+        setRunNotice(message);
+        setState((s) => failStream(s, message));
         revalidator.revalidate();
+        return true;
       } finally {
         if (abortRef.current === ac) abortRef.current = null;
       }
     },
     [meta.id, state.streaming, revalidator],
   );
+
+  useEffect(() => {
+    const key = pendingPromptKey(meta.id);
+    const pending = sessionStorage.getItem(key);
+    if (!pending || startedPending.has(meta.id)) return;
+    startedPending.add(meta.id);
+    void send(pending).then((ok) => {
+      if (ok) sessionStorage.removeItem(key);
+      else startedPending.delete(meta.id);
+    });
+  }, [meta.id, send]);
 
   const stop = () => abortRef.current?.abort();
 
@@ -207,8 +224,12 @@ export function ChatView({
       )}
       <Composer
         streaming={state.streaming}
-        onSend={send}
+        onSend={(prompt) => {
+          void send(prompt);
+        }}
         onStop={stop}
+        cwd={meta.cwd}
+        autoFocus
         key={params.id}
       />
     </>

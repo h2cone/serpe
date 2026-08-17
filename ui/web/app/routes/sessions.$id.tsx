@@ -7,7 +7,6 @@ import type { SessionSummary } from "~/lib/wire";
 
 export async function clientLoader({ params }: Route.ClientLoaderArgs) {
   const id = params.id!;
-  // Single GET: split meta/messages in-process (no dual full-detail fetch).
   const session = await api.getSession(id);
   const {
     messages,
@@ -74,9 +73,7 @@ function SessionHeader({ meta }: { meta: SessionSummary }) {
           title={`Session ${meta.id} · ${meta.cwd}`}
           aria-label={`Session ${meta.id}, working directory ${meta.cwd}`}
         >
-          <span className="session-id">{meta.id.slice(0, 12)}</span>
-          <span className="context-separator" aria-hidden="true" />
-          <span className="session-cwd">{meta.cwd}</span>
+          {meta.cwd}
         </p>
       </div>
       <div className="header-actions">
@@ -93,7 +90,6 @@ function SessionHeader({ meta }: { meta: SessionSummary }) {
             aria-label="Delete session"
           >
             <TrashIcon className="button-icon" />
-            <span className="button-label">Delete</span>
           </button>
         </Form>
       </div>

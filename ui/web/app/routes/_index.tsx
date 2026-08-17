@@ -1,38 +1,59 @@
-import { redirect, useLoaderData, useRevalidator } from "react-router";
+import { useState } from "react";
+import { useNavigate, useOutletContext } from "react-router";
+import { Composer } from "~/components/composer";
 import { api } from "~/lib/api";
-
-export async function clientLoader() {
-  try {
-    const sessions = await api.listSessions();
-    if (sessions.length > 0) {
-      return redirect(`/sessions/${sessions[0].id}`);
-    }
-  } catch {
-    // API down: show landing
-  }
-  return { empty: true };
-}
+import {
+  loadWorkspace,
+  pendingPromptKey,
+  saveWorkspace,
+  titleFromPrompt,
+} from "~/lib/prefs";
 
 export default function Index() {
-  useLoaderData<typeof clientLoader>();
-  const revalidator = useRevalidator();
+  const navigate = useNavigate();
+  const { defaultCwd } = useOutletContext<{ defaultCwd: string }>();
+  const [cwd, setCwd] = useState(() => loadWorkspace() || defaultCwd);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
   return (
-    <div className="empty-state">
-      <div className="empty-state-inner">
-        <div className="empty-mark" aria-hidden="true" />
-        <h1>Ready when you are</h1>
-        <p>
-          Create a session from the sidebar, or make sure <code>serpe-server</code>{" "}
-          is running on :8080.
+    <div className="landing">
+      <h1 className="landing-mark">Serpe</h1>
+      <Composer
+        streaming={false}
+        disabled={busy}
+        cwd={cwd}
+        cwdEditable
+        autoFocus
+        placeholder="What should we work on?"
+        onCwdChange={(next) => {
+          setCwd(next);
+          saveWorkspace(next);
+        }}
+        onStop={() => {}}
+        onSend={async (prompt) => {
+          setBusy(true);
+          setError(null);
+          try {
+            const created = await api.createSession({
+              title: titleFromPrompt(prompt),
+              ...(cwd.trim() ? { cwd: cwd.trim() } : {}),
+            });
+            sessionStorage.setItem(pendingPromptKey(created.id), prompt);
+            navigate(`/sessions/${created.id}`);
+          } catch (e) {
+            setError(
+              e instanceof Error ? e.message : "Could not create a session.",
+            );
+            setBusy(false);
+          }
+        }}
+      />
+      {error && (
+        <p className="landing-error" role="alert">
+          {error}
         </p>
-        <button
-          type="button"
-          className="retry-button"
-          onClick={() => revalidator.revalidate()}
-        >
-          Retry connection
-        </button>
-      </div>
+      )}
     </div>
   );
 }

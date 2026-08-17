@@ -57,8 +57,10 @@ function responseProblem(status: number): string {
       return "The requested record is too large to display.";
     case 429:
       return "The server is rate-limiting requests. Try again shortly.";
+    case 500:
+    case 502:
     case 503:
-      return "The server is busy or shutting down. Try again shortly.";
+      return "Can't reach the local server.";
     default:
       return `The server returned HTTP ${status}.`;
   }

@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { StreamToolStatus } from "~/lib/transcript";
 import type { ContentPart, Message } from "~/lib/wire";
-import { ToolIcon } from "./icons";
-
 export function ContentPartView({ part }: { part: ContentPart }) {
   switch (part.type) {
     case "text":
@@ -24,16 +22,9 @@ export function ContentPartView({ part }: { part: ContentPart }) {
       return (
         <section className={`result-card${part.is_error ? " error" : ""}`}>
           <div className="result-heading">
-            <span className="tool-glyph" aria-hidden="true">
-              <ToolIcon className="tool-icon" />
-            </span>
-            <span className="result-title">
-              <span className="result-label">Tool output</span>
-              <span className="result-name">{part.name}</span>
-            </span>
+            <span className="result-name">{part.name}</span>
             <span className="result-status">
-              <span className="status-dot" aria-hidden="true" />
-              {part.is_error ? "Failed" : "Complete"}
+              {part.is_error ? "Failed" : "Done"}
             </span>
           </div>
           <div className="result-content">
@@ -164,17 +155,8 @@ export function ToolCallCard({
   return (
     <section className={`tool-card${failed ? " error" : ""}`}>
       <div className="tool-heading">
-        <span className="tool-glyph" aria-hidden="true">
-          <ToolIcon className="tool-icon" />
-        </span>
         <span className="tool-name">{name}</span>
-        <span className="tool-status">
-          <span
-            className={`status-dot${status === "running" || status === "pending" ? " is-running" : ""}`}
-            aria-hidden="true"
-          />
-          {statusLabel}
-        </span>
+        <span className="tool-status">{statusLabel}</span>
       </div>
       {argsDisplay && <pre className="tool-args">{argsDisplay}</pre>}
       {result && (

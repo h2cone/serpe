@@ -1,14 +1,15 @@
+import { useEffect, useState } from "react";
 import {
-  Form,
   Link,
   NavLink,
   Outlet,
   useLoaderData,
-  useNavigation,
+  useLocation,
+  useRevalidator,
 } from "react-router";
 import { api } from "~/lib/api";
 import type { SessionSummary } from "~/lib/wire";
-import { BrandMark, PlusIcon } from "~/components/icons";
+import { MenuIcon, PlusIcon } from "~/components/icons";
 
 export async function clientLoader() {
   try {
@@ -24,42 +25,76 @@ export async function clientLoader() {
 
 export default function Layout() {
   const { sessions, error } = useLoaderData<typeof clientLoader>();
-  const nav = useNavigation();
-  const busy = nav.state !== "idle";
+  const location = useLocation();
+  const revalidator = useRevalidator();
+  const [railOpen, setRailOpen] = useState(false);
+  const onHome = location.pathname === "/";
+
+  useEffect(() => {
+    setRailOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!railOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRailOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [railOpen]);
 
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand-row">
-          <Link to="/" className="brand" aria-label="serpe home">
-            <BrandMark className="brand-mark" />
-            <span className="brand-wordmark">serpe</span>
+    <div className={`shell${railOpen ? " is-rail-open" : ""}`}>
+      <button
+        type="button"
+        className="rail-backdrop"
+        aria-label="Close sidebar"
+        tabIndex={railOpen ? 0 : -1}
+        onClick={() => setRailOpen(false)}
+      />
+      <aside className="rail" aria-label="Sidebar">
+        <div className="rail-top">
+          <Link to="/" className="brand" aria-label="Serpe home">
+            <span className="brand-wordmark">Serpe</span>
           </Link>
-          <Form method="post" action="/sessions/new">
-            <button
-              type="submit"
-              disabled={busy}
-              className="new-button"
-              aria-busy={busy}
-            >
-              <PlusIcon className="button-icon" />
-              {busy ? "Creating…" : "New"}
-            </button>
-          </Form>
         </div>
-        {error && (
-          <p className="api-error">API offline: {error}</p>
-        )}
-        <nav className="session-nav" aria-label="Sessions">
-          <div className="session-nav-heading">
-            <span>Sessions</span>
-            <span>{sessions.length}</span>
-          </div>
+        <Link
+          to="/"
+          className={`new-chat${onHome ? " is-active" : ""}`}
+          aria-current={onHome ? "page" : undefined}
+          title="New chat"
+        >
+          <PlusIcon className="button-icon" />
+          <span>New chat</span>
+        </Link>
+        <nav className="session-nav" aria-label="Recents">
+          <div className="session-nav-heading">Recents</div>
           <SessionList sessions={sessions} />
         </nav>
+        <div className="rail-foot">
+          <button
+            type="button"
+            className="presence-button"
+            title={error ? `${error} Click to retry.` : "Connected to the local server"}
+            onClick={() => revalidator.revalidate()}
+          >
+            <span className="presence">{error ? "Offline" : "Local"}</span>
+          </button>
+        </div>
       </aside>
-      <main className="main min-h-0">
-        <Outlet />
+      <main className="stage">
+        <div className="stage-chrome">
+          <button
+            type="button"
+            className="menu-button"
+            aria-label="Open sidebar"
+            aria-expanded={railOpen}
+            onClick={() => setRailOpen(true)}
+          >
+            <MenuIcon className="button-icon" />
+          </button>
+        </div>
+        <Outlet context={{ defaultCwd: sessions[0]?.cwd ?? "" }} />
       </main>
     </div>
   );
@@ -67,9 +102,7 @@ export default function Layout() {
 
 function SessionList({ sessions }: { sessions: SessionSummary[] }) {
   if (sessions.length === 0) {
-    return (
-      <p className="session-empty">No sessions yet. Create one.</p>
-    );
+    return <p className="session-empty">No sessions yet</p>;
   }
   return (
     <ul className="session-list">
@@ -81,13 +114,9 @@ function SessionList({ sessions }: { sessions: SessionSummary[] }) {
               `session-link${isActive ? " is-active" : ""}`
             }
             prefetch="intent"
+            title={s.cwd}
           >
             <div className="session-title">{s.title || s.preview || s.id}</div>
-            <div className="session-meta">
-              {s.message_count} {s.message_count === 1 ? "message" : "messages"}
-              <span aria-hidden="true"> · </span>
-              {s.id.slice(0, 8)}
-            </div>
           </NavLink>
         </li>
       ))}

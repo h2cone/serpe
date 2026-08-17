@@ -10,7 +10,7 @@ export function BrandMark({ className }: IconProps) {
       aria-hidden="true"
       focusable="false"
     >
-      <rect className="brand-mark-field" x="1" y="1" width="30" height="30" rx="9" />
+      <rect className="brand-mark-field" x="1" y="1" width="30" height="30" rx="8" />
       <path
         className="brand-mark-path"
         d="M22 9.2c0-2.3-1.9-4.2-4.2-4.2h-5.1a4.2 4.2 0 0 0 0 8.4h5.1a4.2 4.2 0 0 1 0 8.4h-5.6A4.2 4.2 0 0 1 8 17.6"
@@ -31,7 +31,7 @@ export function PlusIcon({ className }: IconProps) {
 export function SendIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" />
+      <path d="M12 6 18.8 17.4H5.2z" />
     </svg>
   );
 }
@@ -56,6 +56,31 @@ export function TrashIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="M5 7h14M9 7V4h6v3M8 10v7M12 10v7M16 10v7M7 7l1 13h8l1-13" />
+    </svg>
+  );
+}
+
+export function FolderIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 7.5A1.5 1.5 0 0 1 5.5 6H9l1.8 1.8H18.5A1.5 1.5 0 0 1 20 9.3v7.2a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5z" />
+    </svg>
+  );
+}
+
+export function PanelIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M9 5v14" />
+    </svg>
+  );
+}
+
+export function MenuIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 8h14M5 12h14M5 16h14" />
     </svg>
   );
 }

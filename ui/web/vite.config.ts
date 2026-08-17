@@ -16,6 +16,11 @@ export default defineConfig({
       "/api": {
         target: apiOrigin(),
         changeOrigin: true,
+        bypass(req) {
+          const url = req.url ?? "";
+          if (url === "/api" || url.startsWith("/api/")) return undefined;
+          return url;
+        },
       },
     },
   },

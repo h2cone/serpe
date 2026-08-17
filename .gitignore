@@ -30,3 +30,6 @@ docs/
 node_modules/
 build/
 .react-router/
+.impeccable/
+DESIGN.md
+PRODUCT.md
