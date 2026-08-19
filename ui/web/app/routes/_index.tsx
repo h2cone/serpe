@@ -15,6 +15,7 @@ export default function Index() {
   const [cwd, setCwd] = useState(() => loadWorkspace() || defaultCwd);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
 
   return (
     <div className="landing">
@@ -24,11 +25,26 @@ export default function Index() {
         disabled={busy}
         cwd={cwd}
         cwdEditable
+        cwdPicking={picking}
         autoFocus
         placeholder="What should we work on?"
-        onCwdChange={(next) => {
-          setCwd(next);
-          saveWorkspace(next);
+        onPickCwd={async () => {
+          if (picking || busy) return;
+          setPicking(true);
+          setError(null);
+          try {
+            const next = await api.pickWorkingDir(cwd.trim() || undefined);
+            if (next) {
+              setCwd(next);
+              saveWorkspace(next);
+            }
+          } catch (e) {
+            setError(
+              e instanceof Error ? e.message : "Could not choose a folder.",
+            );
+          } finally {
+            setPicking(false);
+          }
         }}
         onStop={() => {}}
         onSend={async (prompt) => {

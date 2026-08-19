@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/h2cone/serpe/compose"
@@ -20,15 +21,16 @@ import (
 
 // Config constructs a Server.
 type Config struct {
-	Runner        *loops.Runner     // required: agent execution
-	Manager       *sessions.Manager // required: sessions and turn persistence
-	CWD           string            // default cwd for new sessions; required non-empty
-	NewID         func() string
-	ListenAddress string
-	Random        io.Reader
-	Limits        ServerLimits
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
+	Runner         *loops.Runner     // required: agent execution
+	Manager        *sessions.Manager // required: sessions and turn persistence
+	CWD            string            // default cwd for new sessions; required non-empty
+	NewID          func() string
+	ListenAddress  string
+	Random         io.Reader
+	Limits         ServerLimits
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	PickWorkingDir func(context.Context, string) (string, error)
 }
 
 // ServerLimits are process-wide admission ceilings. Zero fields use the
@@ -56,6 +58,8 @@ type Server struct {
 	writeTimeout   time.Duration
 	listenAddress  string
 	listenLoopback bool
+	pickWorkingDir func(context.Context, string) (string, error)
+	picking        atomic.Bool
 }
 
 // New validates cfg and returns a Server.
@@ -71,7 +75,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	listenAddress := cfg.ListenAddress
 	if listenAddress == "" {
-		listenAddress = "127.0.0.1:8080"
+		listenAddress = "127.0.0.1:18080"
 	}
 	loopback, err := classifyListenAddress(listenAddress)
 	if err != nil {
@@ -112,6 +116,7 @@ func New(cfg Config) (*Server, error) {
 		encodePermits: make(chan struct{}, limits.MaxSessionEncodes),
 		readTimeout:   readTimeout, writeTimeout: writeTimeout,
 		listenAddress: listenAddress, listenLoopback: loopback,
+		pickWorkingDir: cfg.PickWorkingDir,
 	}
 	return server, nil
 }
@@ -193,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/fork", s.handleForkSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/runs", s.handleRun)
+	mux.HandleFunc("POST /api/workdir", s.handlePickWorkingDir)
 	// Content-Type is set explicitly by writeJSON / SSE handlers; no jsonMW interceptor.
 	return chain(mux, recoverMW, s.requestIDMW, s.deadlineSupportMW, loggingMW, s.securityMW, s.requestAdmissionMW)
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/h2cone/serpe/core/tools/builtin"
 	"github.com/h2cone/serpe/internal/bootstrap"
 	"github.com/h2cone/serpe/internal/httpapi"
+	"github.com/h2cone/serpe/internal/workdir"
 	"github.com/h2cone/serpe/runtime/sessions"
 )
 
@@ -78,7 +79,8 @@ func run() (returnErr error) {
 
 	api, err := httpapi.New(httpapi.Config{
 		Runner: runner, Manager: manager, CWD: cwd,
-		ListenAddress: opts.listen,
+		ListenAddress:  opts.listen,
+		PickWorkingDir: workdir.Pick,
 	})
 	if err != nil {
 		return err
@@ -156,7 +158,7 @@ func parseOptions() (options, error) {
 		return options{}, err
 	}
 	var opts options
-	flag.StringVar(&opts.listen, "listen", envOr("SERPE_ADDR", "127.0.0.1:8080"), "IP-literal listen address and port")
+	flag.StringVar(&opts.listen, "listen", envOr("SERPE_ADDR", "127.0.0.1:18080"), "IP-literal listen address and port")
 	flag.StringVar(&opts.cwd, "cwd", envOr("SERPE_CWD", defaultCWD), "default session working directory")
 	flag.StringVar(&opts.storeRoot, "sessions-dir", os.Getenv("SERPE_SESSIONS_DIR"), "private session store directory")
 	flag.StringVar(&opts.tools, "tools", os.Getenv("SERPE_TOOLS"), "comma-separated subset of read,write,edit,bash; empty enables all four; none disables local tools")

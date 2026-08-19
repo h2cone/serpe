@@ -1,4 +1,4 @@
-export const DEFAULT_API_ORIGIN = "http://127.0.0.1:8080";
+export const DEFAULT_API_ORIGIN = "http://127.0.0.1:18080";
 
 /** Resolve the single API-origin setting used by dev, SSR, and proxying. */
 export function apiOrigin(

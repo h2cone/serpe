@@ -260,6 +260,13 @@ export function decodeSessionDetail(value: unknown): SessionDetail {
   };
 }
 
+export function decodePickedWorkingDir(value: unknown): string {
+  const input = object(value, "workdir");
+  const cwd = stringField(input, "cwd", "workdir.cwd");
+  if (cwd.trim() === "") return fail("workdir.cwd", "a non-empty string");
+  return cwd;
+}
+
 export function decodeSessionMutation(value: unknown): SessionMutation {
   const input = object(value, "session");
   const summary = sessionSummary(input, "session");

@@ -341,15 +341,15 @@ restricts the set; `none` disables them. Every file call is bound to
 ```go
 srv, _ := httpapi.New(httpapi.Config{
     Runner: runner, Manager: manager, CWD: "/work",
-    ListenAddress: "127.0.0.1:8080",
+    ListenAddress: "127.0.0.1:18080",
 })
 ```
 
 ```bash
-# API on 127.0.0.1:8080; MemoryStore unless configured.
+# API on 127.0.0.1:18080; MemoryStore unless configured.
 go run ./cmd/serpe-server
 
-# Web dev server (proxies /api → http://127.0.0.1:8080)
+# Web dev server (proxies /api → http://127.0.0.1:18080)
 cd ui/web && pnpm install && pnpm run dev
 ```
 
@@ -358,11 +358,11 @@ cd ui/web && pnpm install && pnpm run dev
 | `OPENAI_API_KEY` | CLI, server | required |
 | `OPENAI_BASE_URL` | CLI, server | optional override |
 | `OPENAI_DEFAULT_MODEL` | CLI, server | required — selects the model |
-| `SERPE_ADDR` | server | IP-literal listen address (default `127.0.0.1:8080`) |
+| `SERPE_ADDR` | server | IP-literal listen address (default `127.0.0.1:18080`) |
 | `SERPE_CWD` | server | default session CWD (default: process cwd) |
 | `SERPE_SESSIONS_DIR` | server | existing absolute private FileStore root; unset → MemoryStore |
 | `SERPE_TOOLS` | server | optional restriction from `read,write,edit,bash`; empty enables all four; `none` disables local tools |
-| `SERPE_API_ORIGIN` | web | backend origin (default `http://127.0.0.1:8080`) |
+| `SERPE_API_ORIGIN` | web | backend origin (default `http://127.0.0.1:18080`) |
 
 #### FileStore migration
 

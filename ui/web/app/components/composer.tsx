@@ -8,7 +8,8 @@ export function Composer({
   onStop,
   cwd,
   cwdEditable = false,
-  onCwdChange,
+  cwdPicking = false,
+  onPickCwd,
   disabled = false,
   placeholder,
   autoFocus = false,
@@ -18,18 +19,17 @@ export function Composer({
   onStop: () => void;
   cwd?: string;
   cwdEditable?: boolean;
-  onCwdChange?: (cwd: string) => void;
+  cwdPicking?: boolean;
+  onPickCwd?: () => void;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
 }) {
   const [value, setValue] = useState("");
-  const [editingCwd, setEditingCwd] = useState(false);
-  const [cwdDraft, setCwdDraft] = useState(cwd ?? "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const cwdRef = useRef<HTMLInputElement>(null);
   const busy = disabled || streaming;
   const canSend = value.trim().length > 0 && !busy;
+  const folderLocked = !cwdEditable || busy || cwdPicking;
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -37,19 +37,6 @@ export function Composer({
     textarea.style.height = "auto";
     textarea.style.height = `${Math.max(34, Math.min(textarea.scrollHeight, 160))}px`;
   }, [value]);
-
-  useEffect(() => {
-    setCwdDraft(cwd ?? "");
-  }, [cwd]);
-
-  useEffect(() => {
-    if (editingCwd) cwdRef.current?.focus();
-  }, [editingCwd]);
-
-  const commitCwd = () => {
-    setEditingCwd(false);
-    onCwdChange?.(cwdDraft.trim());
-  };
 
   const hasFolder = Boolean(cwd?.trim());
   const cwdLabel = hasFolder ? shortPath(cwd!.trim()) : "";
@@ -66,52 +53,33 @@ export function Composer({
       }}
     >
       <div className="composer">
-        {cwdEditable && editingCwd ? (
-          <input
-            ref={cwdRef}
-            className="cwd-editor"
-            value={cwdDraft}
-            aria-label="Working folder"
-            placeholder="Folder path"
-            onChange={(e) => setCwdDraft(e.target.value)}
-            onBlur={commitCwd}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitCwd();
-              }
-              if (e.key === "Escape") {
-                setCwdDraft(cwd ?? "");
-                setEditingCwd(false);
-              }
-            }}
-          />
-        ) : (
-          <button
-            type="button"
-            className={`cwd-chip${hasFolder ? "" : " is-icon"}`}
-            disabled={!cwdEditable}
-            title={
-              hasFolder
+        <button
+          type="button"
+          className={`cwd-chip${hasFolder ? "" : " is-icon"}${cwdPicking ? " is-picking" : ""}`}
+          disabled={folderLocked}
+          aria-busy={cwdPicking}
+          title={
+            cwdPicking
+              ? "Opening the folder picker…"
+              : hasFolder
                 ? cwd
-                : "Working folder. Click to set a path, or leave empty to use the server default."
-            }
-            aria-label={
-              cwdEditable
-                ? hasFolder
-                  ? `Working folder ${cwdLabel}. Click to change.`
-                  : "Choose a working folder"
-                : `Working folder ${cwdLabel}`
-            }
-            onClick={() => {
-              if (!cwdEditable) return;
-              setEditingCwd(true);
-            }}
-          >
-            <FolderIcon className="button-icon" />
-            {hasFolder && <span className="cwd-chip-path">{cwdLabel}</span>}
-          </button>
-        )}
+                : "Choose a working folder from the file browser"
+          }
+          aria-label={
+            cwdEditable
+              ? hasFolder
+                ? `Working folder ${cwdLabel}. Click to choose another folder.`
+                : "Choose a working folder"
+              : `Working folder ${cwdLabel}`
+          }
+          onClick={() => {
+            if (folderLocked) return;
+            onPickCwd?.();
+          }}
+        >
+          <FolderIcon className="button-icon" />
+          {hasFolder && <span className="cwd-chip-path">{cwdLabel}</span>}
+        </button>
         <textarea
           ref={textareaRef}
           data-composer="true"

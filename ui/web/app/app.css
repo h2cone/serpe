@@ -819,8 +819,7 @@ textarea {
   box-shadow: var(--shadow-pill-focus);
 }
 
-.cwd-chip,
-.cwd-editor {
+.cwd-chip {
   display: inline-flex;
   height: 2.15rem;
   max-width: 12.5rem;
@@ -860,21 +859,14 @@ textarea {
   filter: none;
 }
 
+.cwd-chip.is-picking {
+  opacity: 0.7;
+}
+
 .cwd-chip-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.cwd-editor {
-  width: 11rem;
-  max-width: 42vw;
-  outline: none;
-  box-shadow: none;
-}
-
-.cwd-editor:focus-visible {
-  box-shadow: var(--focus);
 }
 
 .composer-textarea {
@@ -1121,8 +1113,7 @@ textarea {
     font-size: 0.9rem;
   }
 
-  .cwd-chip,
-  .cwd-editor {
+  .cwd-chip {
     max-width: 7.5rem;
   }
 }

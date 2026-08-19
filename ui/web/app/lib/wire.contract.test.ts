@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  decodePickedWorkingDir,
   decodeSessionDetail,
   decodeSessionMutation,
   decodeSSEFrame,
@@ -92,5 +93,11 @@ describe("REST wire contract", () => {
         snapshot_length: 4,
       }),
     ).toThrow(WireProtocolError);
+  });
+
+  it("decodes a picked working directory", () => {
+    expect(decodePickedWorkingDir({ cwd: "/work" })).toBe("/work");
+    expect(() => decodePickedWorkingDir({ cwd: "  " })).toThrow(WireProtocolError);
+    expect(() => decodePickedWorkingDir({})).toThrow(WireProtocolError);
   });
 });

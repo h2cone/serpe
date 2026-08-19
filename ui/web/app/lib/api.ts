@@ -1,5 +1,6 @@
 import { apiOrigin } from "../../api-origin";
 import {
+  decodePickedWorkingDir,
   decodeSessionDetail,
   decodeSessionMutation,
   decodeSessionSummaries,
@@ -66,6 +67,20 @@ function responseProblem(status: number): string {
   }
 }
 
+function pickWorkingDirProblem(status: number): string {
+  switch (status) {
+    case 400:
+      return "That folder is not a usable working directory.";
+    case 404:
+    case 503:
+      return "The folder picker is unavailable on this server.";
+    case 409:
+      return "A folder picker is already open.";
+    default:
+      return responseProblem(status);
+  }
+}
+
 function sessionPath(id: string): string {
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(id) || id === "." || id === "..") {
     throw new Error("Invalid session ID");
@@ -100,4 +115,23 @@ export const api = {
     }),
   deleteSession: (id: string) =>
     json<void>(sessionPath(id), () => undefined, { method: "DELETE" }),
+  pickWorkingDir: async (start?: string): Promise<string | null> => {
+    const headers = new Headers({ Accept: "application/json" });
+    const body: { start?: string } = {};
+    if (start?.trim()) body.start = start.trim();
+    headers.set("Content-Type", "application/json");
+    const res = await fetch(`${apiBase()}/api/workdir`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+    });
+    if (res.status === 204) return null;
+    if (!res.ok) {
+      throw new APIError(res.status, pickWorkingDirProblem(res.status));
+    }
+    return decodePickedWorkingDir(await res.json());
+  },
 };
