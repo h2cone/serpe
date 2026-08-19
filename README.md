@@ -346,11 +346,13 @@ srv, _ := httpapi.New(httpapi.Config{
 ```
 
 ```bash
-# API on 127.0.0.1:18080; MemoryStore unless configured.
-go run ./cmd/serpe-server
-
-# Web dev server (proxies /api → http://127.0.0.1:18080)
+# Frontend + API together (API on 127.0.0.1:18080; MemoryStore unless configured).
+# The Vite dev server proxies /api → http://127.0.0.1:18080.
 cd ui/web && pnpm install && pnpm run dev
+
+# Or start each process yourself:
+go run ./cmd/serpe-server
+cd ui/web && pnpm run dev:web
 ```
 
 | Env var | Used by | Meaning |

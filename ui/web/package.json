@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "react-router dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "react-router dev",
+    "dev:api": "node scripts/dev.mjs --api-only",
     "build": "react-router build && node scripts/harden-build.mjs",
     "start": "node server.ts",
     "typecheck": "react-router typegen && tsc --noEmit",
