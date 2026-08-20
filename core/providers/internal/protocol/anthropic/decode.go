@@ -19,7 +19,7 @@ func decodeResponse(wire messageWire, requestID string, stateLimit int64, guard 
 	hasState := false
 	for blockIndex, raw := range wire.Content {
 		var block contentWire
-		if err := json.Unmarshal(raw, &block); err != nil {
+		if err := shared.DecodeJSON(raw, &block); err != nil {
 			return nil, protocolError("Anthropic content block has an invalid shape", err)
 		}
 		switch block.Type {
@@ -55,7 +55,7 @@ func decodeResponse(wire messageWire, requestID string, stateLimit int64, guard 
 		response.Status = models.ResponseStatusIncomplete
 	}
 	if hasState {
-		data, _ := json.Marshal(wire.Content)
+		data, _ := shared.EncodeJSON(wire.Content)
 		if int64(len(data)) > stateLimit {
 			return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "anthropic", Operation: "generate", Code: "provider_state_too_large", Message: "Anthropic provider state exceeds configured limit"}
 		}
@@ -73,8 +73,8 @@ func decodeUsage(usage *usageWire) models.Usage {
 		return models.Usage{}
 	}
 	result := models.Usage{
-		OutputTokens:      shared.OptionalValue(usage.OutputTokens),
-		CachedInputTokens: shared.OptionalValue(usage.CacheReadInputTokens),
+		OutputTokens:      models.FromPointer(usage.OutputTokens),
+		CachedInputTokens: models.FromPointer(usage.CacheReadInputTokens),
 	}
 	inputTokens := int64(0)
 	hasInputTokens := false
@@ -90,7 +90,7 @@ func decodeUsage(usage *usageWire) models.Usage {
 	if hasInputTokens && usage.OutputTokens != nil {
 		result.TotalTokens = models.Some(inputTokens + *usage.OutputTokens)
 	}
-	result.Raw, _ = json.Marshal(usage)
+	result.Raw, _ = shared.EncodeJSON(usage)
 	return result
 }
 

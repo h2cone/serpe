@@ -18,8 +18,8 @@ type messageDTO struct {
 
 type toolResultDTO struct {
 	Content   []models.ContentRecord `json:"content"`
-	IsError   bool                   `json:"is_error,omitempty"`
-	Truncated bool                   `json:"truncated,omitempty"`
+	IsError   bool                   `json:"is_error,omitzero"`
+	Truncated bool                   `json:"truncated,omitzero"`
 	SHA256    string                 `json:"sha256,omitempty"`
 	KeptBytes int64                  `json:"kept_bytes,omitempty"`
 }

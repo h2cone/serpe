@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"math"
@@ -308,7 +309,7 @@ func (t readTool) readText(ctx context.Context, in tools.Invocation, target *res
 		}
 		metadata["next_cursor"] = token
 	}
-	rawMetadata, err := json.Marshal(metadata)
+	rawMetadata, err := jsonv2.Marshal(metadata, jsonv2.Deterministic(true))
 	if err != nil {
 		return tools.Output{}, err
 	}

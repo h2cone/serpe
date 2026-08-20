@@ -14,12 +14,12 @@ import (
 func EncodeRequest(modelID string, req *models.Request, stream bool) ([]byte, error) {
 	wire := chatRequest{
 		Model: modelID, Stream: stream,
-		MaxCompletionTokens: shared.OptionalPointer(req.Generation.MaxOutputTokens),
-		Temperature:         shared.OptionalPointer(req.Generation.Temperature),
-		TopP:                shared.OptionalPointer(req.Generation.TopP),
+		MaxCompletionTokens: req.Generation.MaxOutputTokens.Pointer(),
+		Temperature:         req.Generation.Temperature.Pointer(),
+		TopP:                req.Generation.TopP.Pointer(),
 		Stop:                req.Generation.Stop,
-		Seed:                shared.OptionalPointer(req.Generation.Seed),
-		N:                   shared.OptionalPointer(req.Generation.CandidateCount),
+		Seed:                req.Generation.Seed.Pointer(),
+		N:                   req.Generation.CandidateCount.Pointer(),
 	}
 	if stream {
 		wire.StreamOptions = &streamOptions{IncludeUsage: true}
@@ -39,7 +39,7 @@ func EncodeRequest(modelID string, req *models.Request, stream bool) ([]byte, er
 		wire.Messages = append(wire.Messages, encoded...)
 	}
 	for _, tool := range req.Tools {
-		function := chatFunction{Name: tool.Name, Description: tool.Description, Parameters: append(json.RawMessage(nil), tool.Parameters...), Strict: shared.OptionalPointer(tool.Strict)}
+		function := chatFunction{Name: tool.Name, Description: tool.Description, Parameters: append(json.RawMessage(nil), tool.Parameters...), Strict: tool.Strict.Pointer()}
 		wire.Tools = append(wire.Tools, chatTool{Type: "function", Function: function})
 	}
 	choice, err := encodeToolChoice(req.ToolChoice)
@@ -193,7 +193,7 @@ func encodeResponseFormat(format models.ResponseFormat) (json.RawMessage, error)
 			Schema      json.RawMessage `json:"schema"`
 			Strict      *bool           `json:"strict,omitempty"`
 		}
-		value := schema{Name: format.Name, Description: format.Description, Schema: format.Schema, Strict: shared.OptionalPointer(format.Strict)}
+		value := schema{Name: format.Name, Description: format.Description, Schema: format.Schema, Strict: format.Strict.Pointer()}
 		return marshalJSON(struct {
 			Type       string `json:"type"`
 			JSONSchema schema `json:"json_schema"`
@@ -204,7 +204,7 @@ func encodeResponseFormat(format models.ResponseFormat) (json.RawMessage, error)
 }
 
 func marshalJSON(value any) (json.RawMessage, error) {
-	encoded, err := json.Marshal(value)
+	encoded, err := shared.EncodeJSON(value)
 	if err != nil {
 		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: "encode", Code: "encode_json", Message: "failed to encode Chat Completions request", Cause: err}
 	}

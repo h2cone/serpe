@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -69,7 +70,7 @@ func marshalSession(s *Session) ([]byte, error) {
 			out.Metadata[k] = v
 		}
 	}
-	data, err := json.Marshal(out)
+	data, err := jsonv2.Marshal(out, jsonv2.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("%w: marshal: %v", ErrInvalidSession, err)
 	}
@@ -78,7 +79,7 @@ func marshalSession(s *Session) ([]byte, error) {
 
 func unmarshalSession(data []byte) (*Session, error) {
 	var raw sessionRecord
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := jsonv2.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("%w: decode: %v", ErrInvalidSession, err)
 	}
 	if raw.SchemaVersion != schemaVersion {
@@ -162,7 +163,7 @@ func migrateRecord(data []byte, filenameID, cwdBase string) ([]byte, bool, error
 		return nil, false, fmt.Errorf("%w: record is not strict JSON: %v", ErrInvalidSession, err)
 	}
 	var raw sessionRecord
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := jsonv2.Unmarshal(data, &raw); err != nil {
 		return nil, false, fmt.Errorf("%w: decode legacy record: %v", ErrInvalidSession, err)
 	}
 	if raw.SchemaVersion != schemaVersion || raw.ID != filenameID {

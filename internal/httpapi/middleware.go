@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/pprof"
+	"slices"
 	"strings"
 	"time"
 )
@@ -15,8 +17,8 @@ type ctxKey int
 const requestIDKey ctxKey = 1
 
 func chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler {
-	for i := len(mws) - 1; i >= 0; i-- {
-		h = mws[i](h)
+	for _, mw := range slices.Backward(mws) {
+		h = mw(h)
 	}
 	return h
 }
@@ -56,7 +58,10 @@ func (s *Server) requestIDMW(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("X-Request-ID", id)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, id)))
+		ctx := context.WithValue(r.Context(), requestIDKey, id)
+		pprof.Do(ctx, pprof.Labels("request_id", id), func(ctx context.Context) {
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	})
 }
 

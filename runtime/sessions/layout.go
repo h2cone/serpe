@@ -54,11 +54,10 @@ func isOwnedTempName(name string) bool {
 		return false
 	}
 	withoutSuffix := strings.TrimSuffix(name, recordTempSuffix)
-	dot := strings.LastIndexByte(withoutSuffix, '.')
-	if dot < 0 {
+	base, hexadecimal, found := strings.CutLast(withoutSuffix, ".")
+	if !found {
 		return false
 	}
-	base, hexadecimal := withoutSuffix[:dot], withoutSuffix[dot+1:]
 	if len(hexadecimal) != 32 || hexadecimal != strings.ToLower(hexadecimal) {
 		return false
 	}

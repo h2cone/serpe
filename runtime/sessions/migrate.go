@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -181,7 +181,7 @@ func readMaintenanceRecord(ctx context.Context, root *storeRoot, name string, li
 }
 
 func encodeMigrationManifest(manifest migrationManifest) ([]byte, error) {
-	data, err := json.Marshal(manifest)
+	data, err := jsonv2.Marshal(manifest, jsonv2.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("encode migration manifest: %w", err)
 	}
@@ -210,7 +210,7 @@ func loadMigrationManifest(ctx context.Context, root *storeRoot, requested strin
 		return migrationManifest{}, "", fmt.Errorf("%w: manifest is not strict JSON", ErrStoreCorrupt)
 	}
 	var manifest migrationManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := jsonv2.Unmarshal(data, &manifest); err != nil {
 		return migrationManifest{}, "", fmt.Errorf("%w: invalid migration manifest", ErrStoreCorrupt)
 	}
 	if manifest.Format != maintenanceManifestFormat || manifest.SourceSchemaVersion != schemaVersion ||

@@ -2,8 +2,6 @@
 package anthropic
 
 import (
-	"encoding/json"
-
 	"github.com/h2cone/serpe/core/models"
 	"github.com/h2cone/serpe/core/providers/internal/shared"
 )
@@ -35,7 +33,7 @@ func DecodeResponseJSONWithLimits(data []byte, requestID string, stateLimit int6
 		return nil, protocolError("response is not strict JSON", err)
 	}
 	var wire messageWire
-	if err := json.Unmarshal(data, &wire); err != nil {
+	if err := shared.DecodeJSON(data, &wire); err != nil {
 		return nil, protocolError("response is not valid Anthropic Messages JSON", err)
 	}
 	return decodeResponse(wire, requestID, stateLimit, shared.NewToolCallGuard(limits))

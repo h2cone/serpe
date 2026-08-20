@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -76,15 +77,15 @@ func projectToolContextPlanned(ctx context.Context, messages []models.Message, l
 	keepStart := len(groups)
 	var argumentBytes, resultReserve int64
 	keptGroups := 0
-	for i := len(groups) - 1; i >= 0; i-- {
+	for i, group := range slices.Backward(groups) {
 		if err := ctx.Err(); err != nil {
 			return nil, projectionInfo{}, err
 		}
-		groupArgs, ok := toolArgumentBytes(messages[groups[i].start])
+		groupArgs, ok := toolArgumentBytes(messages[group.start])
 		if !ok {
 			return nil, projectionInfo{}, fmt.Errorf("%w: tool argument context size overflow", ErrRunLimit)
 		}
-		results := int64(len(toolResultsOf(messages[groups[i].start+1])))
+		results := int64(len(toolResultsOf(messages[group.start+1])))
 		reserve, ok := safeProjectionAdd(resultReserve, results*projectedResultReserve)
 		if !ok {
 			return nil, projectionInfo{}, fmt.Errorf("%w: tool result context reserve overflow", ErrRunLimit)
@@ -328,13 +329,13 @@ type projectedResultRef struct {
 func projectedToolResults(messages []models.Message) []projectedResultRef {
 	groups := toolExchangeSpans(messages)
 	refs := make([]projectedResultRef, 0)
-	for i := len(groups) - 1; i >= 0; i-- {
-		messageIndex := groups[i].start + 1
-		callIndexes := make(map[string]int, groups[i].calls)
-		for callIndex, call := range toolCallsOf(messages[groups[i].start]) {
+	for i, group := range slices.Backward(groups) {
+		messageIndex := group.start + 1
+		callIndexes := make(map[string]int, group.calls)
+		for callIndex, call := range toolCallsOf(messages[group.start]) {
 			callIndexes[call.ID] = callIndex
 		}
-		groupRefs := make([]projectedResultRef, 0, groups[i].calls)
+		groupRefs := make([]projectedResultRef, 0, group.calls)
 		for contentIndex, content := range messages[messageIndex].Content {
 			if content.Kind != models.ContentToolResult || content.ToolResult == nil {
 				continue
@@ -514,8 +515,10 @@ func projectedTextSuffix(children []models.Content, limit int64) string {
 		return ""
 	}
 	buf := make([]byte, 0, limit)
-	for i := len(children) - 1; i >= 0 && int64(len(buf)) < limit; i-- {
-		child := children[i]
+	for _, child := range slices.Backward(children) {
+		if int64(len(buf)) >= limit {
+			break
+		}
 		if child.Kind != models.ContentText || child.Text == nil {
 			continue
 		}

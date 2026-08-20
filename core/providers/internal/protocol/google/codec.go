@@ -2,7 +2,6 @@
 package google
 
 import (
-	"encoding/json"
 	"net/url"
 	"strings"
 	"unicode"
@@ -40,7 +39,7 @@ func DecodeResponseJSONWithLimits(data []byte, requestID, fallbackModel string, 
 		return nil, protocolError("response is not strict JSON", err)
 	}
 	var wire responseWire
-	if err := json.Unmarshal(data, &wire); err != nil {
+	if err := shared.DecodeJSON(data, &wire); err != nil {
 		return nil, protocolError("response is not valid Gemini GenerateContent JSON", err)
 	}
 	return decodeResponse(wire, requestID, fallbackModel, stateLimit, shared.NewToolCallGuard(limits))

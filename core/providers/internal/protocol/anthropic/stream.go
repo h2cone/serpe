@@ -80,7 +80,7 @@ func (s *messageSource) Next() (models.Event, error) {
 			return models.Event{}, streamProtocol("invalid_json", "Anthropic stream event is not strict JSON", err)
 		}
 		var event streamEventWire
-		if err := json.Unmarshal(wireEvent.Data, &event); err != nil {
+		if err := shared.DecodeJSON(wireEvent.Data, &event); err != nil {
 			return models.Event{}, streamProtocol("invalid_json", "Anthropic stream event is not valid JSON", err)
 		}
 		if err := s.consume(event, wireEvent.ID); err != nil {
@@ -96,7 +96,7 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 			return streamProtocol("duplicate_start", "duplicate message_start event", nil)
 		}
 		var message messageWire
-		if err := json.Unmarshal(event.Message, &message); err != nil {
+		if err := shared.DecodeJSON(event.Message, &message); err != nil {
 			return streamProtocol("invalid_start", "message_start has invalid metadata", err)
 		}
 		s.responseID = message.ID
@@ -118,7 +118,7 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 			return streamProtocol("duplicate_part", "duplicate content_block_start", nil)
 		}
 		var block contentWire
-		if err := json.Unmarshal(event.ContentBlock, &block); err != nil {
+		if err := shared.DecodeJSON(event.ContentBlock, &block); err != nil {
 			return streamProtocol("invalid_part", "content_block_start has invalid content", err)
 		}
 		state := &blockState{open: true, wire: block}
@@ -227,7 +227,7 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 			state.wire.Thinking = state.thinking.String()
 			state.wire.Signature = state.signature.String()
 		}
-		raw, _ := json.Marshal(state.wire)
+		raw, _ := shared.EncodeJSON(state.wire)
 		s.stateBlocks[event.Index] = raw
 		state.open = false
 		s.queue.Push(models.Event{Kind: models.EventPartEnd, CandidateIndex: 0, PartIndex: event.Index, ProviderEventID: eventID})
@@ -267,7 +267,7 @@ func (s *messageSource) consume(event streamEventWire, eventID string) error {
 			for _, index := range blockIndexes {
 				rawBlocks = append(rawBlocks, s.stateBlocks[index])
 			}
-			data, _ := json.Marshal(rawBlocks)
+			data, _ := shared.EncodeJSON(rawBlocks)
 			if int64(len(data)) > s.stateLimit {
 				return streamProtocol("provider_state_too_large", "Anthropic provider state exceeds configured limit", nil)
 			}

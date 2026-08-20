@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -76,7 +75,7 @@ func TestBaseURLVersionSuffixOverridesProtocolDefault(t *testing.T) {
 				t.Run(string(driver), func(t *testing.T) {
 					t.Parallel()
 					paths := make(chan string, 1)
-					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 						paths <- request.URL.Path
 						writer.Header().Set("Content-Type", "application/json")
 						_, _ = io.WriteString(writer, unaryFixture(test.protocol, false))
@@ -173,7 +172,7 @@ func TestGeminiMultimodalFunctionResponsePolicyAndWire(t *testing.T) {
 
 		t.Run(string(driver)+"_wire", func(t *testing.T) {
 			body := make(chan string, 1)
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				raw, err := io.ReadAll(request.Body)
 				if err != nil {
 					t.Errorf("read body: %v", err)
@@ -221,7 +220,7 @@ func TestGeminiMultimodalFunctionResponsePolicyAndWire(t *testing.T) {
 func runConformanceCase(t *testing.T, protocol providers.Protocol, driver providers.Driver, modelID, unaryPath, streamPath string, tool bool) {
 	t.Helper()
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		calls.Add(1)
 		body, err := io.ReadAll(request.Body)
 		if err != nil {

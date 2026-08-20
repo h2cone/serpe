@@ -3,7 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"net/http"
 	"strings"
@@ -137,15 +137,10 @@ func pumpTurn(ctx context.Context, turn *compose.Turn, output chan<- turnPumpIte
 
 func encodeSSEFrame(frame any) ([]byte, error) {
 	var payload bytes.Buffer
-	encoder := json.NewEncoder(&limitedBuffer{buffer: &payload, limit: maxSSEFrameBytes - len("data: \n\n")})
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(frame); err != nil {
+	if err := jsonv2.MarshalWrite(&limitedBuffer{buffer: &payload, limit: maxSSEFrameBytes - len("data: \n\n")}, frame, jsonv2.Deterministic(true)); err != nil {
 		return nil, err
 	}
 	jsonBytes := payload.Bytes()
-	if len(jsonBytes) > 0 && jsonBytes[len(jsonBytes)-1] == '\n' {
-		jsonBytes = jsonBytes[:len(jsonBytes)-1]
-	}
 	if len(jsonBytes)+len("data: \n\n") > maxSSEFrameBytes {
 		return nil, errors.New("SSE frame exceeds hard limit")
 	}

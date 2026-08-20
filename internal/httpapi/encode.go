@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"bytes"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -94,16 +94,10 @@ func previewMessages(messages []models.Message) string {
 func encodeNoHTML(value any, limit int) ([]byte, error) {
 	var buffer bytes.Buffer
 	buffer.Grow(min(limit, 64<<10))
-	encoder := json.NewEncoder(&limitedBuffer{buffer: &buffer, limit: limit})
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	if err := jsonv2.MarshalWrite(&limitedBuffer{buffer: &buffer, limit: limit}, value, jsonv2.Deterministic(true)); err != nil {
 		return nil, err
 	}
-	data := buffer.Bytes()
-	if len(data) > 0 && data[len(data)-1] == '\n' {
-		data = data[:len(data)-1]
-	}
-	return append([]byte(nil), data...), nil
+	return append([]byte(nil), buffer.Bytes()...), nil
 }
 
 type limitedBuffer struct {

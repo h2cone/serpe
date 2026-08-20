@@ -14,6 +14,33 @@ import (
 	"github.com/h2cone/serpe/core/models"
 )
 
+func TestOptionalPointerMapAndFromPointer(t *testing.T) {
+	t.Parallel()
+	unset := models.None[int]()
+	if unset.Pointer() != nil {
+		t.Fatal("unset Pointer")
+	}
+	if mapped := unset.Map(func(n int) string { return fmt.Sprintf("%d", n) }); mapped.Set {
+		t.Fatal("unset Map")
+	}
+	if got := models.FromPointer((*int)(nil)); got.Set {
+		t.Fatal("nil FromPointer")
+	}
+	set := models.Some(21)
+	pointer := set.Pointer()
+	if pointer == nil || *pointer != 21 {
+		t.Fatalf("Pointer = %v", pointer)
+	}
+	label := set.Map(func(n int) string { return fmt.Sprintf("n=%d", n) })
+	if !label.Set || label.Value != "n=21" {
+		t.Fatalf("Map = %+v", label)
+	}
+	from := models.FromPointer(pointer)
+	if !from.Set || from.Value != 21 {
+		t.Fatalf("FromPointer = %+v", from)
+	}
+}
+
 func TestContentTaggedUnionValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

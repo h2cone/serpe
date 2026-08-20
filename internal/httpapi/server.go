@@ -215,10 +215,11 @@ func (s *Server) ListenAndServe(addr string) error {
 		return err
 	}
 	server := &http.Server{
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    32 << 10,
+		Handler:             s.Handler(),
+		ReadHeaderTimeout:   5 * time.Second,
+		IdleTimeout:         2 * time.Minute,
+		MaxHeaderBytes:      32 << 10,
+		MaxHeaderValueCount: 32,
 	}
 	return server.Serve(gated)
 }

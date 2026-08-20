@@ -1,7 +1,6 @@
 package google
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -58,7 +57,7 @@ func decodeResponse(wire responseWire, requestID, fallbackModel string, stateLim
 			candidate.FinishReason = models.FinishToolCall
 		}
 		if hasState {
-			stateData, _ := json.Marshal(wireCandidate.Content)
+			stateData, _ := shared.EncodeJSON(wireCandidate.Content)
 			if int64(len(stateData)) > stateLimit {
 				return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "google", Operation: "generate", Code: "provider_state_too_large", Message: "Gemini provider state exceeds configured limit"}
 			}
@@ -85,14 +84,14 @@ func decodeUsage(usage *usageMetadataWire) models.Usage {
 		return models.Usage{}
 	}
 	result := models.Usage{
-		InputTokens:       shared.OptionalValue(usage.PromptTokenCount),
-		OutputTokens:      shared.OptionalValue(usage.CandidatesTokenCount),
-		TotalTokens:       shared.OptionalValue(usage.TotalTokenCount),
-		CachedInputTokens: shared.OptionalValue(usage.CachedContentTokenCount),
-		ReasoningTokens:   shared.OptionalValue(usage.ThoughtsTokenCount),
-		ToolUseTokens:     shared.OptionalValue(usage.ToolUsePromptTokenCount),
+		InputTokens:       models.FromPointer(usage.PromptTokenCount),
+		OutputTokens:      models.FromPointer(usage.CandidatesTokenCount),
+		TotalTokens:       models.FromPointer(usage.TotalTokenCount),
+		CachedInputTokens: models.FromPointer(usage.CachedContentTokenCount),
+		ReasoningTokens:   models.FromPointer(usage.ThoughtsTokenCount),
+		ToolUseTokens:     models.FromPointer(usage.ToolUsePromptTokenCount),
 	}
-	result.Raw, _ = json.Marshal(usage)
+	result.Raw, _ = shared.EncodeJSON(usage)
 	return result
 }
 

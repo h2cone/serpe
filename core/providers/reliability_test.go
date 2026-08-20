@@ -20,7 +20,7 @@ import (
 
 func TestHTTPErrorNormalizationAndRedaction(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("Retry-After", "2")
 		writer.Header().Set("X-Request-ID", "request-429")
@@ -48,7 +48,7 @@ func TestResponseAndSSELimits(t *testing.T) {
 		for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
 			driver := driver
 			t.Run(string(driver), func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 					writer.Header().Set("Content-Type", "application/json")
 					_, _ = io.WriteString(writer, `{"id":"`+strings.Repeat("x", 256)+`"}`)
 				}))
@@ -69,7 +69,7 @@ func TestResponseAndSSELimits(t *testing.T) {
 		for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
 			driver := driver
 			t.Run(string(driver), func(t *testing.T) {
-				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 					writer.Header().Set("Content-Type", "text/event-stream")
 					_, _ = io.WriteString(writer, "data: "+strings.Repeat("x", 128)+"\n\n")
 				}))
@@ -105,7 +105,7 @@ func TestSSELimitResetsAcrossCRLFEvents(t *testing.T) {
 	for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
 		driver := driver
 		t.Run(string(driver), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(writer, body)
 			}))
@@ -146,7 +146,7 @@ func TestProviderStreamsRejectUnexpectedEOF(t *testing.T) {
 			for _, driver := range []providers.Driver{providers.DriverDefault, providers.DriverOfficialSDK} {
 				driver := driver
 				t.Run(string(driver), func(t *testing.T) {
-					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+					server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 						writer.Header().Set("Content-Type", "text/event-stream")
 						_, _ = io.WriteString(writer, test.body)
 					}))
@@ -175,7 +175,7 @@ func TestProviderStreamsRejectUnexpectedEOF(t *testing.T) {
 
 func TestStreamProviderErrorClassification(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, `data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}`+"\n\n")
 	}))
@@ -203,7 +203,7 @@ func TestUnknownStreamEventPolicy(t *testing.T) {
 		`data: {"type":"response.future_optional_event","value":1}`,
 		`data: {"type":"response.completed","response":{"id":"r1","model":"model-1","status":"completed","output":[]}}`, "",
 	}, "\n\n")
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, body)
 	}))
@@ -240,7 +240,7 @@ func TestAnthropicUnknownTopLevelEventPolicy(t *testing.T) {
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}",
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}", "",
 	}, "\n\n")
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, body)
 	}))
@@ -313,7 +313,7 @@ func TestAnthropicUnknownContentPolicyWithKnownContent(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				if strings.Contains(string(body), `"stream":true`) {
 					writer.Header().Set("Content-Type", "text/event-stream")
@@ -413,7 +413,7 @@ func TestEmptyResponseUnaryStreamParity(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				streaming := strings.Contains(request.URL.Path, ":streamGenerateContent")
 				if !streaming {
@@ -497,7 +497,7 @@ func TestMultipleCandidateUnaryStreamParity(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				streaming := strings.Contains(request.URL.Path, ":streamGenerateContent") || strings.Contains(string(body), `"stream":true`)
 				if streaming {
@@ -585,7 +585,7 @@ func TestParallelToolUnaryStreamParity(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				if strings.Contains(string(body), `"stream":true`) {
 					writer.Header().Set("Content-Type", "text/event-stream")
@@ -632,7 +632,7 @@ func TestParallelToolUnaryStreamParity(t *testing.T) {
 
 func TestStreamContextCancellation(t *testing.T) {
 	started := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
 		writer.(http.Flusher).Flush()
@@ -689,7 +689,7 @@ func TestProviderStateRoundTrip(t *testing.T) {
 		test := test
 		t.Run(string(test.protocol), func(t *testing.T) {
 			var calls atomic.Int64
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				call := calls.Add(1)
 				body, _ := io.ReadAll(request.Body)
 				writer.Header().Set("Content-Type", "application/json")
@@ -726,7 +726,7 @@ func TestProviderStateRoundTrip(t *testing.T) {
 func TestAnthropicRedactedOnlyStateRoundTripsWithoutPlaceholder(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		writer.Header().Set("Content-Type", "application/json")
 		if calls.Add(1) == 1 {
@@ -766,7 +766,7 @@ func TestAnthropicRedactedOnlyStateRoundTripsWithoutPlaceholder(t *testing.T) {
 
 func TestAnthropicUsageIncludesCachedInputCategories(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(writer, `{"id":"r1","model":"model-1","role":"assistant","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":5,"output_tokens":7}}`)
 	}))
@@ -840,7 +840,7 @@ func TestReasoningProviderStateUnaryStreamParity(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(string(test.protocol), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				isStream := strings.Contains(request.URL.Path, ":streamGenerateContent") || strings.Contains(string(body), `"stream":true`)
 				if isStream {
@@ -880,7 +880,7 @@ func TestReasoningProviderStateUnaryStreamParity(t *testing.T) {
 
 func TestGeminiStreamUsesLogicalPartIndexesAcrossChunks(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, strings.Join([]string{
 			`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Before "}]}}],"modelVersion":"gemini-2.0-flash","responseId":"r1"}`,
@@ -921,7 +921,7 @@ func TestGeminiStreamUsesLogicalPartIndexesAcrossChunks(t *testing.T) {
 
 func TestResponsesStreamRecoversTerminalOnlyTextAndRefusal(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, strings.Join([]string{
 			`data: {"type":"response.created","response":{"id":"r1","model":"model-1","status":"in_progress"}}`,
@@ -972,7 +972,7 @@ func TestResponsesStreamRejectsTerminalContentMismatch(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(writer, strings.Join([]string{
 					`data: {"type":"response.created","response":{"id":"r1","model":"model-1","status":"in_progress"}}`,
@@ -1022,7 +1022,7 @@ func TestImageStructuredOutputAndToolResultEncoding(t *testing.T) {
 		test := test
 		t.Run(string(test.protocol), func(t *testing.T) {
 			var call atomic.Int64
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				current := call.Add(1)
 				markers := []string{test.imageMarker, test.formatMarker}
@@ -1066,7 +1066,7 @@ func TestStrictAndLenientInstructionMapping(t *testing.T) {
 		protocol := protocol
 		t.Run(string(protocol), func(t *testing.T) {
 			var calls atomic.Int64
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				calls.Add(1)
 				body, _ := io.ReadAll(request.Body)
 				if !strings.Contains(string(body), "[developer]") {
@@ -1098,7 +1098,7 @@ func TestStrictAndLenientInstructionMapping(t *testing.T) {
 
 func TestNamespacedExtensionCannotOverrideCanonicalFields(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		if !strings.Contains(string(body), `"service_tier":"priority"`) {
 			t.Errorf("extension not encoded: %s", body)
@@ -1156,7 +1156,7 @@ func TestEmptyToolArgumentsUnaryStreamParity(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				body, _ := io.ReadAll(request.Body)
 				var envelope struct {
 					Stream bool `json:"stream"`
@@ -1204,7 +1204,7 @@ func TestEmptyToolArgumentsUnaryStreamParity(t *testing.T) {
 func TestGeminiPromptBlockUnaryStreamParity(t *testing.T) {
 	t.Parallel()
 	body := `{"promptFeedback":{"blockReason":"SAFETY","blockReasonMessage":"blocked detail"},"modelVersion":"gemini-2.0-flash","responseId":"r"}`
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.Contains(request.URL.Path, ":streamGenerateContent") {
 			writer.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(writer, "data: "+body+"\n\n")
@@ -1274,7 +1274,7 @@ func TestProviderStateRoundTripUsesSemanticToolArguments(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			var calls atomic.Int64
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				calls.Add(1)
 				writer.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(writer, test.response)
@@ -1422,7 +1422,7 @@ func TestBoundModelConcurrentReuse(t *testing.T) {
 		driver := driver
 		t.Run(string(driver), func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(writer, unaryFixture(providers.OpenAIResponses, false))
 			}))
@@ -1447,7 +1447,7 @@ func TestBoundModelConcurrentReuse(t *testing.T) {
 
 func TestOfficialSDKHTTPErrorNormalization(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("Retry-After", "2")
 		writer.Header().Set("X-Request-ID", "request-429")

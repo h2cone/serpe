@@ -85,7 +85,7 @@ func (s *responseSource) Next() (models.Event, error) {
 			return models.Event{}, streamProtocol("invalid_json", "Responses stream event is not strict JSON", err)
 		}
 		var event streamEventWire
-		if err := json.Unmarshal(wireEvent.Data, &event); err != nil {
+		if err := shared.DecodeJSON(wireEvent.Data, &event); err != nil {
 			return models.Event{}, streamProtocol("invalid_json", "Responses stream event is not valid JSON", err)
 		}
 		if err := s.consume(event, wireEvent.ID); err != nil {
@@ -101,7 +101,7 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			return streamProtocol("duplicate_start", "duplicate response.created event", nil)
 		}
 		var response responseWire
-		if err := json.Unmarshal(event.Response, &response); err != nil {
+		if err := shared.DecodeJSON(event.Response, &response); err != nil {
 			return streamProtocol("invalid_start", "response.created is missing response metadata", err)
 		}
 		s.responseID = response.ID
@@ -122,12 +122,12 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			return streamProtocol("missing_start", "output item before response.created", nil)
 		}
 		var header itemHeader
-		if err := json.Unmarshal(event.Item, &header); err != nil {
+		if err := shared.DecodeJSON(event.Item, &header); err != nil {
 			return streamProtocol("invalid_item", "invalid output item", err)
 		}
 		if header.Type == "function_call" {
 			var call functionCallWire
-			if err := json.Unmarshal(event.Item, &call); err != nil || call.Name == "" {
+			if err := shared.DecodeJSON(event.Item, &call); err != nil || call.Name == "" {
 				return streamProtocol("invalid_tool_call", "invalid function-call output item", err)
 			}
 			key := responsePartKey{kind: "function_call", outputIndex: event.OutputIndex}
@@ -138,7 +138,7 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 		}
 	case "response.content_part.added":
 		var part contentPartWire
-		if err := json.Unmarshal(event.Part, &part); err != nil {
+		if err := shared.DecodeJSON(event.Part, &part); err != nil {
 			return streamProtocol("invalid_part", "invalid response content part", err)
 		}
 		key := responsePartKey{kind: part.Type, outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
@@ -163,7 +163,7 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 		}
 	case "response.content_part.done":
 		var part contentPartWire
-		if err := json.Unmarshal(event.Part, &part); err != nil {
+		if err := shared.DecodeJSON(event.Part, &part); err != nil {
 			return streamProtocol("invalid_part", "invalid completed response content part", err)
 		}
 		key := responsePartKey{kind: part.Type, outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}
@@ -233,12 +233,12 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 		return s.endPart(responsePartKey{kind: "reasoning_summary", outputIndex: event.OutputIndex, contentIndex: event.ContentIndex}, eventID)
 	case "response.output_item.done":
 		var header itemHeader
-		if json.Unmarshal(event.Item, &header) == nil && header.Type == "function_call" {
+		if shared.DecodeJSON(event.Item, &header) == nil && header.Type == "function_call" {
 			key := responsePartKey{kind: "function_call", outputIndex: event.OutputIndex}
 			state := s.parts[key]
 			if state != nil && !state.hadDelta {
 				var call functionCallWire
-				if json.Unmarshal(event.Item, &call) == nil {
+				if shared.DecodeJSON(event.Item, &call) == nil {
 					arguments := call.Arguments
 					if arguments == "" {
 						arguments = "{}"
@@ -255,13 +255,13 @@ func (s *responseSource) consume(event streamEventWire, eventID string) error {
 			return streamProtocol("missing_start", "terminal event before response.created", nil)
 		}
 		var response responseWire
-		if err := json.Unmarshal(event.Response, &response); err != nil {
+		if err := shared.DecodeJSON(event.Response, &response); err != nil {
 			return streamProtocol("invalid_terminal", "terminal event has invalid response metadata", err)
 		}
 		return s.complete(response, eventID)
 	case "response.failed":
 		var response responseWire
-		_ = json.Unmarshal(event.Response, &response)
+		_ = shared.DecodeJSON(event.Response, &response)
 		if response.Error != nil {
 			return normalizeWireError(response.Error, "stream_next", s.requestID)
 		}

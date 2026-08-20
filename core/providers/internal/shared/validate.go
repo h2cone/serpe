@@ -63,11 +63,11 @@ func MergeExtension(encoded []byte, extensions map[string]json.RawMessage, names
 		return encoded, nil
 	}
 	var base map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &base); err != nil {
+	if err := DecodeJSON(encoded, &base); err != nil {
 		return nil, fmt.Errorf("encode canonical request: %w", err)
 	}
 	var extension map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &extension); err != nil || extension == nil {
+	if err := DecodeJSON(raw, &extension); err != nil || extension == nil {
 		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: providerFromProtocol(namespace), Operation: "encode", Code: "invalid_extension", Message: "provider extension must be a JSON object"}
 	}
 	blocked := make(map[string]struct{}, len(reserved))
@@ -80,5 +80,5 @@ func MergeExtension(encoded []byte, extensions map[string]json.RawMessage, names
 		}
 		base[key] = append(json.RawMessage(nil), value...)
 	}
-	return json.Marshal(base)
+	return EncodeJSON(base)
 }

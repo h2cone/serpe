@@ -55,7 +55,7 @@ type chatFunction struct {
 }
 
 type chatToolCall struct {
-	Index    int              `json:"index,omitempty"`
+	Index    int              `json:"index,omitzero"`
 	ID       string           `json:"id,omitempty"`
 	Type     string           `json:"type,omitempty"`
 	Function chatCallFunction `json:"function"`

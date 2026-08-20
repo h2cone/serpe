@@ -93,7 +93,7 @@ func decodeTextContent(raw json.RawMessage) ([]models.Content, error) {
 		return nil, nil
 	}
 	var text string
-	if json.Unmarshal(trimmed, &text) == nil {
+	if shared.DecodeJSON(trimmed, &text) == nil {
 		if text == "" {
 			return nil, nil
 		}
@@ -103,7 +103,7 @@ func decodeTextContent(raw json.RawMessage) ([]models.Content, error) {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(trimmed, &parts); err != nil {
+	if err := shared.DecodeJSON(trimmed, &parts); err != nil {
 		return nil, protocolError("assistant content has an unknown shape", err)
 	}
 	output := make([]models.Content, 0, len(parts))
@@ -120,13 +120,13 @@ func decodeUsage(usage *chatUsage) models.Usage {
 		return models.Usage{}
 	}
 	normalized := models.Usage{
-		InputTokens:       shared.OptionalValue(usage.PromptTokens),
-		OutputTokens:      shared.OptionalValue(usage.CompletionTokens),
-		TotalTokens:       shared.OptionalValue(usage.TotalTokens),
-		CachedInputTokens: shared.OptionalValue(usage.PromptTokensDetails.CachedTokens),
-		ReasoningTokens:   shared.OptionalValue(usage.CompletionTokensDetails.ReasoningTokens),
+		InputTokens:       models.FromPointer(usage.PromptTokens),
+		OutputTokens:      models.FromPointer(usage.CompletionTokens),
+		TotalTokens:       models.FromPointer(usage.TotalTokens),
+		CachedInputTokens: models.FromPointer(usage.PromptTokensDetails.CachedTokens),
+		ReasoningTokens:   models.FromPointer(usage.CompletionTokensDetails.ReasoningTokens),
 	}
-	normalized.Raw, _ = json.Marshal(usage)
+	normalized.Raw, _ = shared.EncodeJSON(usage)
 	return normalized
 }
 

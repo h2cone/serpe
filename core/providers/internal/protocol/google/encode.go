@@ -55,12 +55,12 @@ func EncodeRequest(req *models.Request, lenient bool, stateLimit int64) ([]byte,
 		wire.ToolConfig = config
 	}
 	generation := &generationConfig{
-		MaxOutputTokens: shared.OptionalPointer(req.Generation.MaxOutputTokens),
-		Temperature:     shared.OptionalPointer(req.Generation.Temperature),
-		TopP:            shared.OptionalPointer(req.Generation.TopP),
+		MaxOutputTokens: req.Generation.MaxOutputTokens.Pointer(),
+		Temperature:     req.Generation.Temperature.Pointer(),
+		TopP:            req.Generation.TopP.Pointer(),
 		StopSequences:   req.Generation.Stop,
-		Seed:            shared.OptionalPointer(req.Generation.Seed),
-		CandidateCount:  shared.OptionalPointer(req.Generation.CandidateCount),
+		Seed:            req.Generation.Seed.Pointer(),
+		CandidateCount:  req.Generation.CandidateCount.Pointer(),
 	}
 	hasGeneration := req.Generation.MaxOutputTokens.Set || req.Generation.Temperature.Set ||
 		req.Generation.TopP.Set || len(req.Generation.Stop) > 0 || req.Generation.Seed.Set || req.Generation.CandidateCount.Set
@@ -79,7 +79,7 @@ func EncodeRequest(req *models.Request, lenient bool, stateLimit int64) ([]byte,
 	if hasGeneration {
 		wire.GenerationConfig = generation
 	}
-	encoded, err := json.Marshal(wire)
+	encoded, err := shared.EncodeJSON(wire)
 	if err != nil {
 		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "google", Operation: "encode", Message: "failed to encode Gemini request", Cause: err}
 	}
@@ -94,7 +94,7 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) (cont
 	}
 	if accepted {
 		var state contentWire
-		if err := json.Unmarshal(message.ProviderState.Data, &state); err != nil || state.Role != "model" || len(state.Parts) == 0 {
+		if err := shared.DecodeJSON(message.ProviderState.Data, &state); err != nil || state.Role != "model" || len(state.Parts) == 0 {
 			return contentWire{}, invalidState("Gemini provider state must be a model Content object", err)
 		}
 		projected, decodeErr := decodeResponse(responseWire{Candidates: []candidateWire{{Content: state, FinishReason: "STOP"}}}, "", "", stateLimit, shared.NewToolCallGuard(shared.DefaultToolCallLimits()))
@@ -157,9 +157,9 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) (cont
 			}
 			response := json.RawMessage(text.String())
 			if !shared.JSONObject(response) {
-				response, _ = json.Marshal(struct {
+				response, _ = shared.EncodeJSON(struct {
 					Result  string `json:"result"`
-					IsError bool   `json:"isError,omitempty"`
+					IsError bool   `json:"isError,omitzero"`
 				}{Result: text.String(), IsError: block.ToolResult.IsError})
 			}
 			result.Parts = append(result.Parts, partWire{FunctionResponse: &functionResponseWire{ID: block.ToolResult.CallID, Name: block.ToolResult.Name, Response: response, Parts: media}})

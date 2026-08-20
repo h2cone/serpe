@@ -25,6 +25,34 @@ func TestCanonicalValueSemantics(t *testing.T) {
 	}
 }
 
+func TestLookupAs(t *testing.T) {
+	t.Parallel()
+	value, err := jsonvalue.ParseObject([]byte(`{"name":"serpe","ok":true,"n":7}`), jsonvalue.ObjectLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, present, err := value.LookupAs[string]("name")
+	if err != nil || !present || name != "serpe" {
+		t.Fatalf("string LookupAs = %q %v %v", name, present, err)
+	}
+	ok, present, err := value.LookupAs[bool]("ok")
+	if err != nil || !present || !ok {
+		t.Fatalf("bool LookupAs = %v %v %v", ok, present, err)
+	}
+	n, present, err := value.LookupAs[int64]("n")
+	if err != nil || !present || n != 7 {
+		t.Fatalf("int64 LookupAs = %d %v %v", n, present, err)
+	}
+	_, present, err = value.LookupAs[string]("missing")
+	if present || err != nil {
+		t.Fatalf("missing LookupAs present=%v err=%v", present, err)
+	}
+	_, present, err = value.LookupAs[string]("n")
+	if !present || err == nil {
+		t.Fatal("type mismatch should be present with error")
+	}
+}
+
 func TestCanonicalObject(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

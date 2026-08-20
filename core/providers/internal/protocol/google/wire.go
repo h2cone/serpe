@@ -21,7 +21,7 @@ type partWire struct {
 	FileData         *fileDataWire         `json:"fileData,omitempty"`
 	FunctionCall     *functionCallWire     `json:"functionCall,omitempty"`
 	FunctionResponse *functionResponseWire `json:"functionResponse,omitempty"`
-	Thought          bool                  `json:"thought,omitempty"`
+	Thought          bool                  `json:"thought,omitzero"`
 	ThoughtSignature string                `json:"thoughtSignature,omitempty"`
 }
 

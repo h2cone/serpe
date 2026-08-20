@@ -1,7 +1,6 @@
 package google
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -89,7 +88,7 @@ func (s *googleSource) Next() (models.Event, error) {
 			return models.Event{}, streamProtocol("invalid_json", "Gemini stream event is not strict JSON", err)
 		}
 		var response responseWire
-		if err := json.Unmarshal(data, &response); err != nil {
+		if err := shared.DecodeJSON(data, &response); err != nil {
 			return models.Event{}, streamProtocol("invalid_json", "Gemini stream event is not valid JSON", err)
 		}
 		if response.Error != nil {
@@ -299,7 +298,7 @@ func (s *googleSource) complete() error {
 		}
 		var providerState *models.ProviderState
 		if hasState {
-			data, _ := json.Marshal(content)
+			data, _ := shared.EncodeJSON(content)
 			if int64(len(data)) > s.stateLimit {
 				return streamProtocol("provider_state_too_large", "Gemini provider state exceeds configured limit", nil)
 			}

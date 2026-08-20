@@ -3,7 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +15,7 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"uuid"
 
 	"github.com/h2cone/serpe/internal/jsonvalue"
 	"github.com/h2cone/serpe/internal/workdir"
@@ -148,14 +148,11 @@ func requireFields(value jsonvalue.Value, allowed ...string) error {
 }
 
 func optionalString(value jsonvalue.Value, key string) (string, bool, error) {
-	field, present := value.Lookup(key)
-	if !present {
-		return "", false, nil
-	}
-	if field.Kind != jsonvalue.KindString {
+	text, present, err := value.LookupAs[string](key)
+	if err != nil {
 		return "", true, fmt.Errorf("%s must be a string", key)
 	}
-	return field.String, true, nil
+	return text, present, nil
 }
 
 func parsePageQuery(r *http.Request, cursorKey string) (cursor string, present bool, limit int, err error) {
@@ -241,11 +238,7 @@ func (s *Server) generatedID() (id string, err error) {
 		}()
 		id = s.newID()
 	} else {
-		var random [16]byte
-		if _, err = io.ReadFull(s.random, random[:]); err != nil {
-			return "", err
-		}
-		id = base64.RawURLEncoding.EncodeToString(random[:])
+		id = uuid.NewV7().String()
 	}
 	if !sessions.ValidID(id) {
 		return "", errors.New("ID generator returned invalid ID")

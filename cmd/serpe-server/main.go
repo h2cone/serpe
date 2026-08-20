@@ -3,7 +3,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -99,10 +99,11 @@ func run() (returnErr error) {
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	httpServer := &http.Server{
-		Handler:           api.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    32 << 10,
+		Handler:             api.Handler(),
+		ReadHeaderTimeout:   5 * time.Second,
+		IdleTimeout:         2 * time.Minute,
+		MaxHeaderBytes:      32 << 10,
+		MaxHeaderValueCount: 32,
 		BaseContext: func(net.Listener) context.Context {
 			return rootContext
 		},
@@ -144,10 +145,11 @@ func runMigrateStore(arguments []string) error {
 		return fmt.Errorf("migrate-store does not accept positional arguments")
 	}
 	result, err := sessions.MaintainFileStore(context.Background(), options)
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetEscapeHTML(false)
-	if encodeErr := encoder.Encode(result); encodeErr != nil {
+	if encodeErr := jsonv2.MarshalWrite(os.Stdout, result, jsonv2.Deterministic(true)); encodeErr != nil {
 		return errors.Join(err, fmt.Errorf("write migration report: %w", encodeErr))
+	}
+	if _, writeErr := os.Stdout.Write([]byte{'\n'}); writeErr != nil {
+		return errors.Join(err, fmt.Errorf("write migration report: %w", writeErr))
 	}
 	return err
 }

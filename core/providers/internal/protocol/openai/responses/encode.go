@@ -14,9 +14,9 @@ import (
 func EncodeRequest(modelID string, req *models.Request, stream, lenient bool, stateLimit int64) ([]byte, error) {
 	wire := requestWire{
 		Model: modelID, Stream: stream,
-		MaxOutputTokens: shared.OptionalPointer(req.Generation.MaxOutputTokens),
-		Temperature:     shared.OptionalPointer(req.Generation.Temperature),
-		TopP:            shared.OptionalPointer(req.Generation.TopP),
+		MaxOutputTokens: req.Generation.MaxOutputTokens.Pointer(),
+		Temperature:     req.Generation.Temperature.Pointer(),
+		TopP:            req.Generation.TopP.Pointer(),
 	}
 	for _, instruction := range req.Instructions {
 		content, err := marshalJSON(struct {
@@ -40,7 +40,7 @@ func EncodeRequest(modelID string, req *models.Request, stream, lenient bool, st
 		wire.Input = append(wire.Input, items...)
 	}
 	for _, tool := range req.Tools {
-		encoded := toolWire{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: append(json.RawMessage(nil), tool.Parameters...), Strict: shared.OptionalPointer(tool.Strict)}
+		encoded := toolWire{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: append(json.RawMessage(nil), tool.Parameters...), Strict: tool.Strict.Pointer()}
 		wire.Tools = append(wire.Tools, encoded)
 	}
 	choice, err := encodeToolChoice(req.ToolChoice)
@@ -74,12 +74,12 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) ([]js
 	}
 	if accepted {
 		var items []json.RawMessage
-		if err := json.Unmarshal(message.ProviderState.Data, &items); err != nil {
+		if err := shared.DecodeJSON(message.ProviderState.Data, &items); err != nil {
 			return nil, invalidState("Responses provider state must be an array of output items", err)
 		}
 		for _, item := range items {
 			var header itemHeader
-			if json.Unmarshal(item, &header) != nil || (header.Type != "reasoning" && header.Type != "message" && header.Type != "function_call") {
+			if shared.DecodeJSON(item, &header) != nil || (header.Type != "reasoning" && header.Type != "message" && header.Type != "function_call") {
 				return nil, invalidState("Responses provider state contains an unsupported output item", nil)
 			}
 		}
@@ -247,14 +247,14 @@ func encodeTextFormat(format models.ResponseFormat) (json.RawMessage, error) {
 			Description string          `json:"description,omitempty"`
 			Schema      json.RawMessage `json:"schema"`
 			Strict      *bool           `json:"strict,omitempty"`
-		}{Type: "json_schema", Name: format.Name, Description: format.Description, Schema: format.Schema, Strict: shared.OptionalPointer(format.Strict)})
+		}{Type: "json_schema", Name: format.Name, Description: format.Description, Schema: format.Schema, Strict: format.Strict.Pointer()})
 	default:
 		return nil, unsupported("unknown response format")
 	}
 }
 
 func marshalJSON(value any) (json.RawMessage, error) {
-	encoded, err := json.Marshal(value)
+	encoded, err := shared.EncodeJSON(value)
 	if err != nil {
 		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "openai", Operation: "encode", Code: "encode_json", Message: "failed to encode Responses request", Cause: err}
 	}

@@ -27,10 +27,10 @@ type contentWire struct {
 	Source    *imageSource    `json:"source,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
+	Input     json.RawMessage `json:"input,omitzero"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   []contentWire   `json:"content,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	IsError   bool            `json:"is_error,omitzero"`
 	Thinking  string          `json:"thinking,omitempty"`
 	Signature string          `json:"signature,omitempty"`
 	Data      string          `json:"data,omitempty"`

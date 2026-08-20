@@ -23,18 +23,18 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64, guard
 	hasToolCall := false
 	for outputIndex, raw := range wire.Output {
 		var header itemHeader
-		if err := json.Unmarshal(raw, &header); err != nil {
+		if err := shared.DecodeJSON(raw, &header); err != nil {
 			return nil, protocolError("response output item has an invalid shape", err)
 		}
 		switch header.Type {
 		case "message":
 			var item messageItemWire
-			if err := json.Unmarshal(raw, &item); err != nil {
+			if err := shared.DecodeJSON(raw, &item); err != nil {
 				return nil, protocolError("response message item has an invalid shape", err)
 			}
 			for _, partRaw := range item.Content {
 				var part contentPartWire
-				if err := json.Unmarshal(partRaw, &part); err != nil {
+				if err := shared.DecodeJSON(partRaw, &part); err != nil {
 					return nil, protocolError("response content part has an invalid shape", err)
 				}
 				switch part.Type {
@@ -46,7 +46,7 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64, guard
 			}
 		case "function_call":
 			var item functionCallWire
-			if err := json.Unmarshal(raw, &item); err != nil || !shared.JSONObject([]byte(item.Arguments)) {
+			if err := shared.DecodeJSON(raw, &item); err != nil || !shared.JSONObject([]byte(item.Arguments)) {
 				return nil, protocolError("response function call has invalid arguments", err)
 			}
 			key := strconv.Itoa(outputIndex)
@@ -60,7 +60,7 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64, guard
 			hasToolCall = true
 		case "reasoning":
 			var item reasoningItemWire
-			if err := json.Unmarshal(raw, &item); err != nil {
+			if err := shared.DecodeJSON(raw, &item); err != nil {
 				return nil, protocolError("response reasoning item has an invalid shape", err)
 			}
 			for _, summary := range item.Summary {
@@ -83,7 +83,7 @@ func decodeResponse(wire responseWire, requestID string, stateLimit int64, guard
 	candidate.RawFinishReason = rawFinish
 	candidate.FinishReason = responsesFinish(wire.Status, rawFinish, hasToolCall)
 	if hasState {
-		stateData, _ := json.Marshal(wire.Output)
+		stateData, _ := shared.EncodeJSON(wire.Output)
 		if int64(len(stateData)) > stateLimit {
 			return nil, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "generate", Code: "provider_state_too_large", Message: "Responses provider state exceeds configured limit"}
 		}
@@ -107,13 +107,13 @@ func decodeUsage(usage *usageWire) models.Usage {
 		return models.Usage{}
 	}
 	result := models.Usage{
-		InputTokens:       shared.OptionalValue(usage.InputTokens),
-		OutputTokens:      shared.OptionalValue(usage.OutputTokens),
-		TotalTokens:       shared.OptionalValue(usage.TotalTokens),
-		CachedInputTokens: shared.OptionalValue(usage.InputTokensDetails.CachedTokens),
-		ReasoningTokens:   shared.OptionalValue(usage.OutputTokensDetails.ReasoningTokens),
+		InputTokens:       models.FromPointer(usage.InputTokens),
+		OutputTokens:      models.FromPointer(usage.OutputTokens),
+		TotalTokens:       models.FromPointer(usage.TotalTokens),
+		CachedInputTokens: models.FromPointer(usage.InputTokensDetails.CachedTokens),
+		ReasoningTokens:   models.FromPointer(usage.OutputTokensDetails.ReasoningTokens),
 	}
-	result.Raw, _ = json.Marshal(usage)
+	result.Raw, _ = shared.EncodeJSON(usage)
 	return result
 }
 

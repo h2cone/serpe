@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -167,10 +168,10 @@ func (t bashTool) Execute(ctx context.Context, in tools.Invocation) (tools.Outpu
 			return tools.Error("bash process failed"), nil
 		}
 	}
-	metadata, _ := json.Marshal(map[string]any{
+	metadata, _ := jsonv2.Marshal(map[string]any{
 		"exit_code":   exitCode,
 		"termination": reason,
-	})
+	}, jsonv2.Deterministic(true))
 	return group.Output(metadata, isError)
 }
 

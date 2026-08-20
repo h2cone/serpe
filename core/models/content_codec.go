@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/base64"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 
 	"github.com/h2cone/serpe/internal/jsonvalue"
@@ -23,9 +24,9 @@ type ContentRecord struct {
 	Detail    string          `json:"detail,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitzero"` // not omitempty: v2 would drop "{}"
 	CallID    string          `json:"call_id,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	IsError   bool            `json:"is_error,omitzero"`
 	Content   []ContentRecord `json:"content,omitempty"`
 }
 
@@ -142,13 +143,13 @@ func MarshalContent(c Content) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(rec)
+	return jsonv2.Marshal(rec, jsonv2.Deterministic(true))
 }
 
 // UnmarshalContent decodes stable JSON bytes into Content.
 func UnmarshalContent(data []byte) (Content, error) {
 	var rec ContentRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
+	if err := jsonv2.Unmarshal(data, &rec); err != nil {
 		return Content{}, fmt.Errorf("content: decode: %w", err)
 	}
 	return DecodeContent(rec)

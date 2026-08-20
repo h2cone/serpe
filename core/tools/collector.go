@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"slices"
 	"sync"
 	"unicode/utf8"
 
@@ -802,8 +803,7 @@ func (c *TextCollector) partitionRecords() {
 		used += int64(len(record))
 	}
 	used = 0
-	for i := len(c.recordFull) - 1; i >= len(c.recordHead); i-- {
-		record := c.recordFull[i]
+	for _, record := range slices.Backward(c.recordFull[len(c.recordHead):]) {
 		if used+int64(len(record)) > tailBudget {
 			continue
 		}

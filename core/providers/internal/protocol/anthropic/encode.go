@@ -16,8 +16,8 @@ func EncodeRequest(modelID string, req *models.Request, stream, lenient bool, st
 	}
 	wire := requestWire{
 		Model: modelID, MaxTokens: req.Generation.MaxOutputTokens.Value, Stream: stream,
-		Temperature:   shared.OptionalPointer(req.Generation.Temperature),
-		TopP:          shared.OptionalPointer(req.Generation.TopP),
+		Temperature:   req.Generation.Temperature.Pointer(),
+		TopP:          req.Generation.TopP.Pointer(),
 		StopSequences: req.Generation.Stop,
 	}
 	if len(req.Instructions) > 0 {
@@ -57,7 +57,7 @@ func EncodeRequest(modelID string, req *models.Request, stream, lenient bool, st
 	if req.Generation.Seed.Set || req.Generation.CandidateCount.Set {
 		return nil, unsupported("Anthropic does not safely map seed or candidate count")
 	}
-	encoded, err := json.Marshal(wire)
+	encoded, err := shared.EncodeJSON(wire)
 	if err != nil {
 		return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: "encode", Message: "failed to encode Anthropic request", Cause: err}
 	}
@@ -73,14 +73,14 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) ([]js
 	}
 	if accepted {
 		var rawBlocks []json.RawMessage
-		if err := json.Unmarshal(message.ProviderState.Data, &rawBlocks); err != nil {
+		if err := shared.DecodeJSON(message.ProviderState.Data, &rawBlocks); err != nil {
 			return nil, invalidState("Anthropic provider state must be an array of thinking blocks", err)
 		}
 		for _, raw := range rawBlocks {
 			var header struct {
 				Type string `json:"type"`
 			}
-			if err := json.Unmarshal(raw, &header); err != nil || (header.Type != "thinking" && header.Type != "redacted_thinking" && header.Type != "text" && header.Type != "tool_use") {
+			if err := shared.DecodeJSON(raw, &header); err != nil || (header.Type != "thinking" && header.Type != "redacted_thinking" && header.Type != "text" && header.Type != "tool_use") {
 				return nil, invalidState("Anthropic provider state contains an unsupported content block", err)
 			}
 			output = append(output, append(json.RawMessage(nil), raw...))
@@ -144,7 +144,7 @@ func encodeMessage(message models.Message, lenient bool, stateLimit int64) ([]js
 		default:
 			return nil, unsupported(fmt.Sprintf("content kind %q cannot be encoded by Anthropic", block.Kind))
 		}
-		raw, err := json.Marshal(mapped)
+		raw, err := shared.EncodeJSON(mapped)
 		if err != nil {
 			return nil, &models.Error{Kind: models.ErrorInvalidRequest, Provider: "anthropic", Operation: "encode", Message: "failed to encode Anthropic message content", Cause: err}
 		}
@@ -161,19 +161,19 @@ func encodeToolChoice(choice models.ToolChoice) (json.RawMessage, error) {
 	case "":
 		return nil, nil
 	case models.ToolChoiceAuto:
-		return json.Marshal(struct {
+		return shared.EncodeJSON(struct {
 			Type string `json:"type"`
 		}{Type: "auto"})
 	case models.ToolChoiceNone:
-		return json.Marshal(struct {
+		return shared.EncodeJSON(struct {
 			Type string `json:"type"`
 		}{Type: "none"})
 	case models.ToolChoiceRequired:
-		return json.Marshal(struct {
+		return shared.EncodeJSON(struct {
 			Type string `json:"type"`
 		}{Type: "any"})
 	case models.ToolChoiceFunction:
-		return json.Marshal(struct {
+		return shared.EncodeJSON(struct {
 			Type string `json:"type"`
 			Name string `json:"name"`
 		}{Type: "tool", Name: choice.Name})

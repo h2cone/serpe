@@ -159,15 +159,17 @@ func JoinEndpointPath(basePath, endpoint string) string {
 // may continue with ASCII letters or digits (for example v2 or v1beta1).
 func SplitAPIVersionSuffix(path string) (prefix, version string, ok bool) {
 	path = strings.TrimSuffix(path, "/")
-	lastSlash := strings.LastIndexByte(path, '/')
-	version = path[lastSlash+1:]
+	prefix, version, found := strings.CutLast(path, "/")
+	if !found {
+		if !isAPIVersionSegment(path) {
+			return path, "", false
+		}
+		return "", path, true
+	}
 	if !isAPIVersionSegment(version) {
 		return path, "", false
 	}
-	if lastSlash < 0 {
-		return "", version, true
-	}
-	return path[:lastSlash], version, true
+	return prefix, version, true
 }
 
 func trimLeadingAPIVersion(path string) (string, bool) {

@@ -2,7 +2,6 @@ package chatcompletions
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -92,7 +91,7 @@ func (s *chatSource) Next() (models.Event, error) {
 			return models.Event{}, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "invalid_json", Message: "Chat Completions stream event is not strict JSON", Cause: err}
 		}
 		var chunk chatResponse
-		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+		if err := shared.DecodeJSON(event.Data, &chunk); err != nil {
 			return models.Event{}, &models.Error{Kind: models.ErrorProtocol, Provider: "openai", Operation: "stream_next", Code: "invalid_json", Message: "Chat Completions stream event is not valid JSON", Cause: err}
 		}
 		if chunk.Error != nil {

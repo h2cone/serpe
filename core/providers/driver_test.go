@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -169,7 +168,7 @@ func TestOfficialSDKDisablesRetry(t *testing.T) {
 		t.Run(string(protocol), func(t *testing.T) {
 			t.Parallel()
 			var calls atomic.Int64
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := newLoopbackServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				calls.Add(1)
 				writer.Header().Set("Content-Type", "application/json")
 				writer.Header().Set("Retry-After", "1")
